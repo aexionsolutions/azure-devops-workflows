@@ -22,14 +22,14 @@ on:
         default: false
       unit_test_project:
         description: 'Path to unit test project (e.g., tests/Ems.UnitTests/Ems.UnitTests.csproj)'
-        required: false
+        required: true
         type: string
-        default: 'tests/Ems.UnitTests/Ems.UnitTests.csproj'
+        
       api_project:
         description: 'Path to API project csproj (e.g., backend/src/Ems.Api/Ems.Api.csproj)'
-        required: false
+        required: true
         type: string
-        default: 'backend/src/Ems.Api/Ems.Api.csproj'
+        
   push:
     tags:
       - 'v*'
@@ -50,14 +50,14 @@ on:
         default: false
       unit_test_project:
         description: 'Path to unit test project (e.g., tests/Ems.UnitTests/Ems.UnitTests.csproj)'
-        required: false
+        required: true
         type: string
-        default: 'tests/Ems.UnitTests/Ems.UnitTests.csproj'
+        
       api_project:
         description: 'Path to API project csproj (e.g., backend/src/Ems.Api/Ems.Api.csproj)'
-        required: false
+        required: true
         type: string
-        default: 'backend/src/Ems.Api/Ems.Api.csproj'
+        
   # All automated triggers are orchestrated from main-verify.yml via workflow_dispatch
 
 permissions:

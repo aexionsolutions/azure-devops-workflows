@@ -22,9 +22,9 @@ on:
         default: false
       web_directory:
         description: 'Path to web project directory (e.g., web/tems-portal)'
-        required: false
+        required: true
         type: string
-        default: 'web/tems-portal'
+        
   push:
     tags:
       - 'v*'
@@ -45,9 +45,9 @@ on:
         default: false
       web_directory:
         description: 'Path to web project directory (e.g., web/tems-portal)'
-        required: false
+        required: true
         type: string
-        default: 'web/tems-portal'
+        
   # All automated triggers are orchestrated from main-verify.yml via workflow_dispatch
 
 concurrency:
