@@ -25,6 +25,11 @@ on:
         required: false
         type: string
         default: 'tests/Ems.UnitTests/Ems.UnitTests.csproj'
+      api_project:
+        description: 'Path to API project csproj (e.g., backend/src/Ems.Api/Ems.Api.csproj)'
+        required: false
+        type: string
+        default: 'backend/src/Ems.Api/Ems.Api.csproj'
   push:
     tags:
       - 'v*'
@@ -48,6 +53,11 @@ on:
         required: false
         type: string
         default: 'tests/Ems.UnitTests/Ems.UnitTests.csproj'
+      api_project:
+        description: 'Path to API project csproj (e.g., backend/src/Ems.Api/Ems.Api.csproj)'
+        required: false
+        type: string
+        default: 'backend/src/Ems.Api/Ems.Api.csproj'
   # All automated triggers are orchestrated from main-verify.yml via workflow_dispatch
 
 permissions:
@@ -176,7 +186,7 @@ jobs:
       - name: Publish API (zip)
         if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed'
         run: |
-          dotnet publish tems-platform/src/Ems.Api/Ems.Api.csproj \
+          dotnet publish ${{ inputs.api_project || 'backend/src/Ems.Api/Ems.Api.csproj' }} \
             -c Release -o ./publish \
             -p:InformationalVersion="${VERSION}" -p:Version="0.0.0"
           cd publish
