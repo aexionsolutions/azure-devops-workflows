@@ -71,6 +71,18 @@ on:
         required: false
         type: boolean
         default: true
+
+      configure_app_services:
+        description: 'Configure App Service settings with Key Vault references'
+        required: false
+        type: boolean
+        default: true
+
+      disable_easy_auth:
+        description: 'Disable Easy Auth on API App Service'
+        required: false
+        type: boolean
+        default: true
     
     secrets:
       AZURE_CLIENT_ID:
