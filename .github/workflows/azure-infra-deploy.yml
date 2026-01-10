@@ -1,0 +1,418 @@
+name: Azure Infrastructure Deploy
+
+on:
+  workflow_call:
+    inputs:
+      # Environment & Azure Settings
+      environment:
+        description: 'Environment to deploy (dev, uat, preprod, prod)'
+        required: true
+        type: string
+      
+      azure_location:
+        description: 'Azure region (e.g., ukwest, uksouth, eastus)'
+        required: true
+        type: string
+      
+      resource_group:
+        description: 'Resource group name (e.g., tems-dev-rg, ravenxpress-prod-rg)'
+        required: true
+        type: string
+      
+      # Bicep Configuration
+      bicep_template_path:
+        description: 'Path to main Bicep template (relative to repo root)'
+        required: false
+        type: string
+        default: 'infra/main.bicep'
+      
+      deployment_name:
+        description: 'Azure deployment name (defaults to "main")'
+        required: false
+        type: string
+        default: 'main'
+      
+      # PostgreSQL Configuration
+      postgres_server_name:
+        description: 'PostgreSQL server name (auto-generated if not provided: <prefix>-<env>-pg)'
+        required: false
+        type: string
+        default: ''
+      
+      postgres_admin_user:
+        description: 'PostgreSQL admin username'
+        required: false
+        type: string
+        default: 'pgadmin'
+      
+      manage_existing_postgres:
+        description: 'Allow updates to existing Postgres server and ensure DB'
+        required: false
+        type: boolean
+        default: false
+      
+      # Bicep Parameters (pass-through)
+      name_prefix:
+        description: 'Resource name prefix for Bicep template (e.g., tems-dev, ravenxpress-prod)'
+        required: true
+        type: string
+      
+      # Azure AD B2C (Optional)
+      aad_b2c_authority:
+        description: 'Azure AD B2C authority URL (optional)'
+        required: false
+        type: string
+        default: ''
+      
+      aad_b2c_client_id:
+        description: 'Azure AD B2C client ID (optional)'
+        required: false
+        type: string
+        default: ''
+      
+      aad_b2c_api_scope:
+        description: 'Azure AD B2C API scope (optional)'
+        required: false
+        type: string
+        default: ''
+      
+      # Feature Flags
+      enable_kv_rbac:
+        description: 'Enable automatic Key Vault RBAC assignment for workflow and managed identities'
+        required: false
+        type: boolean
+        default: true
+      
+      validate_secrets:
+        description: 'Validate required secrets before deployment'
+        required: false
+        type: boolean
+        default: true
+    
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Azure AD application (client) ID for OIDC authentication'
+        required: true
+      
+      AZURE_TENANT_ID:
+        description: 'Azure AD tenant ID'
+        required: true
+      
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure subscription ID'
+        required: true
+      
+      POSTGRES_ADMIN_PASSWORD:
+        description: 'PostgreSQL administrator password'
+        required: true
+      
+      AZURE_CREDENTIALS:
+        description: 'Azure service principal JSON (fallback authentication)'
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC with fallback)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
+          allow-no-subscriptions: false
+
+      - name: Ensure latest Bicep CLI
+        run: az bicep upgrade
+
+      - name: Ensure PostgreSQL provider registered
+        shell: bash
+        run: |
+          set -e
+          STATE=$(az provider show -n Microsoft.DBforPostgreSQL --query registrationState -o tsv || echo "Unknown")
+          echo "Microsoft.DBforPostgreSQL provider state: $STATE"
+          if [ "$STATE" != "Registered" ] && [ "$STATE" != "Registering" ]; then
+            echo "Attempting to register provider (best effort)..."
+            az provider register -n Microsoft.DBforPostgreSQL --wait || echo "⚠️  Skipping provider register due to insufficient permissions."
+          else
+            echo "Provider already $STATE"
+          fi
+
+      - name: Ensure Application Insights provider registered
+        shell: bash
+        run: |
+          set -e
+          STATE=$(az provider show -n microsoft.operationalinsights --query registrationState -o tsv || echo "Unknown")
+          echo "microsoft.operationalinsights provider state: $STATE"
+          if [ "$STATE" != "Registered" ] && [ "$STATE" != "Registering" ]; then
+            echo "Attempting to register provider (best effort)..."
+            az provider register -n microsoft.operationalinsights --wait || echo "⚠️  Skipping provider register due to insufficient permissions."
+          else
+            echo "Provider already $STATE"
+          fi
+
+      - name: Ensure PostgreSQL flexible server CLI extension
+        shell: bash
+        run: |
+          az extension add --name rdbms-flexible-server --upgrade -y || \
+          az extension update --name rdbms-flexible-server -y || \
+          true
+
+      - name: Ensure resource group exists
+        shell: bash
+        run: |
+          az group create \
+            --name "${{ inputs.resource_group }}" \
+            --location "${{ inputs.azure_location }}"
+
+      - name: Validate required secrets
+        if: inputs.validate_secrets == true
+        shell: bash
+        run: |
+          set -e
+          MISSING=""
+          
+          if [ -z "${{ secrets.POSTGRES_ADMIN_PASSWORD }}" ]; then
+            echo "❌ POSTGRES_ADMIN_PASSWORD secret is not set"
+            MISSING="$MISSING POSTGRES_ADMIN_PASSWORD"
+          fi
+          
+          if [ -n "$MISSING" ]; then
+            echo ""
+            echo "❌ Missing required secrets:$MISSING"
+            echo ""
+            echo "Please configure secrets in GitHub:"
+            echo "  Repository Settings → Secrets and variables → Actions → Environment: '${{ inputs.environment }}'"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+
+      - name: Resolve PostgreSQL server name
+        id: pg
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.postgres_server_name }}" ]; then
+            PG_NAME="${{ inputs.postgres_server_name }}"
+          else
+            PG_NAME="${{ inputs.name_prefix }}-pg"
+          fi
+          echo "server_name=$PG_NAME" >> $GITHUB_OUTPUT
+          echo "PostgreSQL server name: $PG_NAME"
+
+      - name: Check PostgreSQL server existence
+        id: pg_exists
+        shell: bash
+        run: |
+          set -e
+          PG_NAME="${{ steps.pg.outputs.server_name }}"
+          SUB_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          if az resource show \
+            -g "${{ inputs.resource_group }}" \
+            -n "$PG_NAME" \
+            --resource-type Microsoft.DBforPostgreSQL/flexibleServers \
+            1>/dev/null 2>&1; then
+            
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "PostgreSQL server $PG_NAME exists"
+            
+            # Get current state
+            STATE=$(az rest --method get \
+              --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME?api-version=2024-08-01" \
+              --query properties.state -o tsv || echo "Unknown")
+            echo "Current state: $STATE"
+            
+            # Determine if we need to start it
+            if [ "${{ inputs.manage_existing_postgres }}" = "true" ]; then
+              echo "needs_start=true" >> $GITHUB_OUTPUT
+            else
+              echo "needs_start=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "needs_start=false" >> $GITHUB_OUTPUT
+            echo "PostgreSQL server $PG_NAME does not exist yet"
+          fi
+
+      - name: Start PostgreSQL server if needed (blocking)
+        if: steps.pg_exists.outputs.exists == 'true' && steps.pg_exists.outputs.needs_start == 'true'
+        shell: bash
+        run: |
+          set -e
+          PG_NAME="${{ steps.pg.outputs.server_name }}"
+          echo "Starting PostgreSQL server $PG_NAME..."
+          
+          az postgres flexible-server start \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "$PG_NAME" || echo "⚠️  Start command failed or server already started"
+          
+          echo "Waiting for server to be Ready..."
+          MAX_ATTEMPTS=60
+          SLEEP_SECONDS=10
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            STATE=$(az postgres flexible-server show \
+              --resource-group "${{ inputs.resource_group }}" \
+              --name "$PG_NAME" \
+              --query state -o tsv || echo "Unknown")
+            
+            echo "Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS: State = $STATE"
+            
+            if [ "$STATE" = "Ready" ]; then
+              echo "✅ PostgreSQL server is Ready"
+              exit 0
+            fi
+            
+            ATTEMPT=$((ATTEMPT+1))
+            sleep $SLEEP_SECONDS
+          done
+          
+          echo "⚠️  PostgreSQL server did not reach Ready state within timeout"
+          exit 1
+
+      - name: Determine Bicep parameters for PostgreSQL
+        id: bicep_params
+        shell: bash
+        run: |
+          PG_EXISTS="${{ steps.pg_exists.outputs.exists }}"
+          MANAGE_EXISTING="${{ inputs.manage_existing_postgres }}"
+          
+          # If managing existing, treat as non-existing in Bicep (allow updates)
+          if [ "$PG_EXISTS" = "true" ] && [ "$MANAGE_EXISTING" = "true" ]; then
+            echo "pg_existing=false" >> $GITHUB_OUTPUT
+            echo "ensure_db=true" >> $GITHUB_OUTPUT
+          elif [ "$PG_EXISTS" = "true" ]; then
+            echo "pg_existing=true" >> $GITHUB_OUTPUT
+            echo "ensure_db=false" >> $GITHUB_OUTPUT
+          else
+            echo "pg_existing=false" >> $GITHUB_OUTPUT
+            echo "ensure_db=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy Bicep template
+        id: deploy
+        shell: bash
+        env:
+          PG_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          AAD_AUTHORITY: ${{ inputs.aad_b2c_authority }}
+          AAD_CLIENT_ID: ${{ inputs.aad_b2c_client_id }}
+          AAD_API_SCOPE: ${{ inputs.aad_b2c_api_scope }}
+        run: |
+          set -e
+          az deployment group create \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "${{ inputs.deployment_name }}" \
+            --template-file "${{ inputs.bicep_template_path }}" \
+            --parameters namePrefix="${{ inputs.name_prefix }}" \
+                         pgAdminUser="${{ inputs.postgres_admin_user }}" \
+                         pgAdminPassword="$PG_ADMIN_PASSWORD" \
+                         pgExisting="${{ steps.bicep_params.outputs.pg_existing }}" \
+                         ensureDbOnExisting="${{ steps.bicep_params.outputs.ensure_db }}" \
+                         aadAuthority="$AAD_AUTHORITY" \
+                         aadClientId="$AAD_CLIENT_ID" \
+                         aadApiScope="$AAD_API_SCOPE"
+
+      - name: Show deployment error details (if failed)
+        if: failure()
+        shell: bash
+        run: |
+          echo "== Deployment error details =="
+          az deployment group show \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "${{ inputs.deployment_name }}" \
+            --query properties.error -o jsonc || true
+          
+          echo ""
+          echo "== Failed operations (last 50) =="
+          az deployment operation group list \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "${{ inputs.deployment_name }}" \
+            --query "[?properties.provisioningState=='Failed'].{Operation:properties.targetResource.resourceType, Name:properties.targetResource.resourceName, Error:properties.statusMessage.error}" \
+            -o jsonc || true
+
+      - name: Get deployment outputs
+        id: outputs
+        shell: bash
+        run: |
+          OUTPUTS=$(az deployment group show \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "${{ inputs.deployment_name }}" \
+            --query properties.outputs -o json)
+          
+          echo "outputs=$OUTPUTS" >> $GITHUB_OUTPUT
+          echo "Deployment outputs:"
+          echo "$OUTPUTS" | jq .
+
+      - name: Setup Key Vault RBAC (if enabled)
+        if: inputs.enable_kv_rbac == true
+        shell: bash
+        run: |
+          set -e
+          
+          # Get Key Vault name from deployment outputs
+          KV_NAME=$(az deployment group show \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "${{ inputs.deployment_name }}" \
+            --query "properties.outputs.keyVaultName.value" -o tsv || echo "")
+          
+          if [ -z "$KV_NAME" ]; then
+            echo "⚠️  Key Vault name not found in deployment outputs, skipping RBAC setup"
+            exit 0
+          fi
+          
+          echo "Setting up Key Vault RBAC for: $KV_NAME"
+          
+          # Get workflow identity principal ID
+          WORKFLOW_PRINCIPAL_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
+          
+          # Assign Key Vault Secrets Officer to workflow identity
+          echo "Assigning Key Vault Secrets Officer to workflow identity..."
+          az role assignment create \
+            --assignee-object-id "$WORKFLOW_PRINCIPAL_ID" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Key Vault Secrets Officer" \
+            --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
+            2>&1 || echo "⚠️  Role assignment may already exist or insufficient permissions"
+          
+          # Get API managed identity principal ID (if exists)
+          API_MI_NAME="${{ inputs.name_prefix }}-api-mi"
+          API_MI_ID=$(az identity show \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "$API_MI_NAME" \
+            --query principalId -o tsv 2>/dev/null || echo "")
+          
+          if [ -n "$API_MI_ID" ]; then
+            echo "Assigning Key Vault Secrets User to API managed identity..."
+            az role assignment create \
+              --assignee-object-id "$API_MI_ID" \
+              --assignee-principal-type ServicePrincipal \
+              --role "Key Vault Secrets User" \
+              --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
+              2>&1 || echo "⚠️  Role assignment may already exist or insufficient permissions"
+          fi
+          
+          echo "✅ Key Vault RBAC setup completed"
+
+      - name: Deployment Summary
+        shell: bash
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Resource Group**: ${{ inputs.resource_group }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Location**: ${{ inputs.azure_location }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Name**: ${{ inputs.deployment_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **PostgreSQL Server**: ${{ steps.pg.outputs.server_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Infrastructure deployment completed successfully" >> $GITHUB_STEP_SUMMARY

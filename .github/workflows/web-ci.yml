@@ -1,0 +1,167 @@
+name: Web CI (React/Next.js)
+
+on:
+  workflow_call:
+    inputs:
+      # Project Configuration
+      working_directory:
+        description: 'Path to web project directory'
+        required: false
+        type: string
+        default: 'web'
+      
+      node_version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+      
+      package_manager:
+        description: 'Package manager (npm or pnpm)'
+        required: false
+        type: string
+        default: 'npm'
+      
+      # CI Steps
+      run_lint:
+        description: 'Run linting'
+        required: false
+        type: boolean
+        default: true
+      
+      run_tests:
+        description: 'Run tests'
+        required: false
+        type: boolean
+        default: true
+      
+      run_build:
+        description: 'Run production build'
+        required: false
+        type: boolean
+        default: true
+      
+      # Playwright Configuration
+      run_playwright:
+        description: 'Run Playwright E2E tests'
+        required: false
+        type: boolean
+        default: false
+      
+      playwright_install_deps:
+        description: 'Install Playwright browser dependencies'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  web-ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install dependencies (npm)
+        if: inputs.package_manager == 'npm'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          rm -f package-lock.json
+          npm install
+
+      - name: Install dependencies (pnpm)
+        if: inputs.package_manager == 'pnpm'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          npm install -g pnpm
+          pnpm install
+
+      - name: Install Playwright browsers
+        if: inputs.playwright_install_deps == true
+        working-directory: ${{ inputs.working_directory }}
+        run: npx playwright install --with-deps
+
+      - name: Run linting
+        if: inputs.run_lint == true
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "npm" ]; then
+            npm run lint --if-present
+          else
+            pnpm run lint --if-present
+          fi
+
+      - name: Run unit tests
+        if: inputs.run_tests == true
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "npm" ]; then
+            npm test --if-present
+          else
+            pnpm test --if-present
+          fi
+
+      - name: Run Playwright E2E tests
+        if: inputs.run_playwright == true
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "npm" ]; then
+            npm run test:e2e --if-present || npm run test:ci --if-present
+          else
+            pnpm run test:e2e --if-present || pnpm run test:ci --if-present
+          fi
+
+      - name: Build production bundle
+        if: inputs.run_build == true
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "npm" ]; then
+            npm run build
+          else
+            pnpm run build
+          fi
+
+      - name: Upload Playwright report (if available)
+        if: always() && inputs.run_playwright == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: ${{ inputs.working_directory }}/playwright-report
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Upload build artifacts
+        if: inputs.run_build == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: |
+            ${{ inputs.working_directory }}/build
+            ${{ inputs.working_directory }}/.next
+            ${{ inputs.working_directory }}/dist
+            ${{ inputs.working_directory }}/out
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: CI Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Web CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${{ inputs.working_directory }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Node Version**: ${{ inputs.node_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package Manager**: ${{ inputs.package_manager }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Linting**: ${{ inputs.run_lint && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tests**: ${{ inputs.run_tests && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Playwright**: ${{ inputs.run_playwright && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build**: ${{ inputs.run_build && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY

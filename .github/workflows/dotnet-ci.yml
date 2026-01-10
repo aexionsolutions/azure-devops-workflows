@@ -1,0 +1,285 @@
+name: .NET CI
+
+on:
+  workflow_call:
+    inputs:
+      # Solution Configuration
+      solution_path:
+        description: 'Path to .NET solution file'
+        required: false
+        type: string
+        default: '*.sln'
+      
+      dotnet_version:
+        description: '.NET SDK version'
+        required: false
+        type: string
+        default: '10.0.x'
+      
+      # Testing Configuration
+      test_projects:
+        description: 'Glob pattern for test projects (e.g., **/*Tests.csproj)'
+        required: false
+        type: string
+        default: '**/*Tests.csproj'
+      
+      run_integration_tests:
+        description: 'Run integration tests (requires Docker services)'
+        required: false
+        type: boolean
+        default: false
+      
+      # Coverage Configuration
+      coverage_threshold:
+        description: 'Minimum code coverage percentage'
+        required: false
+        type: number
+        default: 80
+      
+      # Playwright Configuration
+      run_playwright:
+        description: 'Run Playwright E2E tests'
+        required: false
+        type: boolean
+        default: false
+      
+      playwright_project_path:
+        description: 'Path to Playwright project (e.g., web/portal)'
+        required: false
+        type: string
+        default: 'web'
+      
+      node_version:
+        description: 'Node.js version for Playwright'
+        required: false
+        type: string
+        default: '20'
+      
+      # SonarCloud Configuration
+      sonar_enabled:
+        description: 'Enable SonarCloud analysis'
+        required: false
+        type: boolean
+        default: false
+      
+      # PR Context (for SonarCloud PR decoration)
+      pr_number:
+        description: 'Pull request number'
+        required: false
+        type: string
+        default: ''
+      
+      pr_head:
+        description: 'Pull request head ref'
+        required: false
+        type: string
+        default: ''
+      
+      pr_base:
+        description: 'Pull request base ref'
+        required: false
+        type: string
+        default: ''
+    
+    secrets:
+      SONAR_TOKEN:
+        description: 'SonarCloud authentication token'
+        required: false
+      
+      SONAR_ORG:
+        description: 'SonarCloud organization'
+        required: false
+      
+      SONAR_PROJECT_KEY:
+        description: 'SonarCloud project key'
+        required: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    # Docker services for integration tests
+    # Only active when run_integration_tests: true
+    services:
+      postgres:
+        image: ${{ inputs.run_integration_tests && 'postgres:15-alpine' || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_password_123
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      azurite:
+        image: ${{ inputs.run_integration_tests && 'mcr.microsoft.com/azure-storage/azurite:latest' || '' }}
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for SonarCloud
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Setup Node (for Playwright)
+        if: inputs.run_playwright == true
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Detect SonarCloud availability
+        id: sonar
+        if: inputs.sonar_enabled == true
+        shell: bash
+        run: |
+          ENABLED=false
+          
+          if [ -n "${{ secrets.SONAR_TOKEN }}" ] && \
+             [ -n "${{ secrets.SONAR_ORG }}" ] && \
+             [ -n "${{ secrets.SONAR_PROJECT_KEY }}" ]; then
+            ENABLED=true
+            echo "✅ SonarCloud credentials available"
+          else
+            echo "⚠️  SonarCloud credentials not configured, skipping analysis"
+          fi
+          
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+
+      - name: Install SonarCloud scanner
+        if: inputs.sonar_enabled == true && steps.sonar.outputs.enabled == 'true'
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ inputs.solution_path }}
+
+      - name: Begin SonarCloud analysis
+        if: inputs.sonar_enabled == true && steps.sonar.outputs.enabled == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        shell: bash
+        run: |
+          SONAR_ARGS="/k:\"${{ secrets.SONAR_PROJECT_KEY }}\" \
+                      /o:\"${{ secrets.SONAR_ORG }}\" \
+                      /d:sonar.token=\"$SONAR_TOKEN\" \
+                      /d:sonar.host.url=\"https://sonarcloud.io\" \
+                      /d:sonar.cs.opencover.reportsPaths=\"**/coverage.opencover.xml\""
+          
+          # Add PR decoration if PR context provided
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            SONAR_ARGS="$SONAR_ARGS \
+                       /d:sonar.pullrequest.key=\"${{ inputs.pr_number }}\" \
+                       /d:sonar.pullrequest.branch=\"${{ inputs.pr_head }}\" \
+                       /d:sonar.pullrequest.base=\"${{ inputs.pr_base }}\""
+          fi
+          
+          eval "dotnet sonarscanner begin $SONAR_ARGS"
+
+      - name: Build solution
+        run: dotnet build ${{ inputs.solution_path }} --no-restore --configuration Release
+
+      - name: Run unit tests with coverage
+        shell: bash
+        run: |
+          dotnet test ${{ inputs.solution_path }} \
+            --no-build \
+            --configuration Release \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults \
+            --logger "trx;LogFileName=test-results.trx" \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+
+      - name: Install Playwright dependencies
+        if: inputs.run_playwright == true
+        working-directory: ${{ inputs.playwright_project_path }}
+        run: |
+          npm install
+          npx playwright install --with-deps
+
+      - name: Run Playwright E2E tests
+        if: inputs.run_playwright == true
+        working-directory: ${{ inputs.playwright_project_path }}
+        run: npm run test:ci --if-present
+
+      - name: Generate coverage report
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          reportgenerator \
+            -reports:**/coverage.opencover.xml \
+            -targetdir:./CoverageReport \
+            -reporttypes:"HtmlInline_AzurePipelines;Cobertura;JsonSummary"
+
+      - name: Check coverage threshold
+        shell: bash
+        run: |
+          SUMMARY_FILE="./CoverageReport/Summary.json"
+          
+          if [ ! -f "$SUMMARY_FILE" ]; then
+            echo "⚠️  Coverage summary not found"
+            exit 0
+          fi
+          
+          COVERAGE=$(jq -r '.summary.linecoverage' "$SUMMARY_FILE")
+          THRESHOLD=${{ inputs.coverage_threshold }}
+          
+          echo "Code Coverage: $COVERAGE%"
+          echo "Threshold: $THRESHOLD%"
+          
+          if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+            echo "❌ Coverage $COVERAGE% is below threshold $THRESHOLD%"
+            exit 1
+          else
+            echo "✅ Coverage meets threshold"
+          fi
+
+      - name: End SonarCloud analysis
+        if: inputs.sonar_enabled == true && steps.sonar.outputs.enabled == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ./CoverageReport
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ./TestResults
+          retention-days: 30
+
+      - name: CI Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## .NET CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Solution**: ${{ inputs.solution_path }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **.NET Version**: ${{ inputs.dotnet_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Integration Tests**: ${{ inputs.run_integration_tests && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Playwright Tests**: ${{ inputs.run_playwright && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **SonarCloud**: ${{ inputs.sonar_enabled && steps.sonar.outputs.enabled == 'true' && '✅ Enabled' || '⏭️ Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "./CoverageReport/Summary.json" ]; then
+            COVERAGE=$(jq -r '.summary.linecoverage' "./CoverageReport/Summary.json")
+            echo "- **Code Coverage**: $COVERAGE%" >> $GITHUB_STEP_SUMMARY
+          fi
