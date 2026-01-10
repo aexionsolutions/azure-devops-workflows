@@ -398,6 +398,122 @@ jobs:
           fi
           
           echo "✅ Key Vault RBAC setup completed"
+      - name: Ensure system-assigned identities on apps
+        if: inputs.configure_app_services == true
+        shell: bash
+        env:
+          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
+          WEB_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).webName.value }}
+        run: |
+          set -e
+          echo "Enabling system-assigned managed identity on API and Web apps..."
+          az webapp identity assign \
+            -g "${{ inputs.resource_group }}" \
+            -n "$API_NAME" \
+            --output none || true
+          az webapp identity assign \
+            -g "${{ inputs.resource_group }}" \
+            -n "$WEB_NAME" \
+            --output none || true
+          echo " Managed identities enabled"
+
+      - name: Ensure KV access for API managed identity
+        if: inputs.configure_app_services == true
+        shell: bash
+        env:
+          KV_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).kvName.value }}
+          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
+        run: |
+          set -e
+          KV_ID=$(az keyvault show \
+            -n "$KV_NAME" \
+            -g "${{ inputs.resource_group }}" \
+            --query id -o tsv)
+
+          API_PID=$(az webapp show \
+            -n "$API_NAME" \
+            -g "${{ inputs.resource_group }}" \
+            --query identity.principalId -o tsv)
+
+          ROLE="4633458b-17de-408a-b874-0445c86b69e6" # Key Vault Secrets User
+
+          # Check if assignment already exists
+          existing=$(az role assignment list \
+            --assignee "$API_PID" \
+            --role "$ROLE" \
+            --scope "$KV_ID" \
+            --query "length(@)" -o tsv 2>/dev/null || echo "0")
+
+          if [ "$existing" -eq 0 ]; then
+            echo "Granting Key Vault Secrets User role to API managed identity..."
+            if az role assignment create \
+              --assignee "$API_PID" \
+              --role "$ROLE" \
+              --scope "$KV_ID" \
+              --only-show-errors 2>/dev/null; then
+              echo " Role assignment created"
+            else
+              echo "  Failed to create role assignment (may need manual assignment)"
+            fi
+          else
+            echo " Key Vault Secrets User already assigned to API"
+          fi
+
+          # Wait for RBAC propagation
+          echo "Waiting for RBAC propagation (up to 90s)..."
+          for i in 1 2 3 4 5 6 7 8 9; do
+            sleep 10
+            if az keyvault secret list --vault-name "$KV_NAME" --maxresults 1 >/dev/null 2>&1; then
+              echo " Key Vault accessible"
+              break
+            fi
+          done
+
+      - name: Validate connection strings in Key Vault
+        if: inputs.configure_app_services == true
+        shell: bash
+        env:
+          KV_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).kvName.value }}
+        run: |
+          set -e
+          echo "Validating connection string secrets created by Bicep..."
+
+          # List of required secrets
+          REQUIRED_SECRETS=(
+            "RedisConnectionString"
+            "ServiceBusConnectionString"
+            "StorageConnectionString"
+            "PostgresConnectionString"
+          )
+
+          # Verify all secrets exist
+          for secret in "${REQUIRED_SECRETS[@]}"; do
+            if az keyvault secret show --vault-name "$KV_NAME" -n "$secret" --query name -o tsv &>/dev/null; then
+              echo "   $secret exists"
+            else
+              echo "   ERROR: $secret not found in Key Vault"
+              echo "  Check Bicep modules in infra/*/azure/modules/"
+              exit 1
+            fi
+          done
+
+          # Validate PostgreSQL connection string format
+          PG_CONN=$(az keyvault secret show --vault-name "$KV_NAME" -n "PostgresConnectionString" --query value -o tsv)
+          PG_CONN_LENGTH=${#PG_CONN}
+
+          if [ "$PG_CONN_LENGTH" -lt 80 ]; then
+            echo " PostgresConnectionString too short (< 80 chars)"
+            exit 1
+          fi
+
+          if [[ ! "$PG_CONN" =~ Host=.*\.postgres\.database\.azure\.com.*Database=.*Username=.*Password=.*SslMode=.*TrustServerCertificate=.* ]]; then
+            echo " PostgresConnectionString format validation failed"
+            exit 1
+          fi
+
+          echo " All connection strings validated"
+
+
       - name: Configure App Service settings
         if: inputs.configure_app_services == true
         shell: bash
