@@ -348,6 +348,29 @@ jobs:
           echo "outputs<<EOF" >> $GITHUB_OUTPUT; echo "$OUTPUTS" >> $GITHUB_OUTPUT; echo "EOF" >> $GITHUB_OUTPUT
           echo "Deployment outputs:"
           echo "$OUTPUTS" | jq .
+      - name: Capture outputs (names only)
+        id: out
+        shell: bash
+        run: |
+          set -e
+          OUTPUTS=$(az deployment group show \
+            --resource-group "${{ inputs.resource_group }}" \
+            --name "${{ inputs.deployment_name }}" \
+            --query properties.outputs -o json)
+          
+          echo "KV_NAME=$(echo "$OUTPUTS" | jq -r '.kvName.value')" >> $GITHUB_OUTPUT
+          echo "KV_URI=$(echo "$OUTPUTS" | jq -r '.kvUri.value')" >> $GITHUB_OUTPUT
+          echo "API_NAME=$(echo "$OUTPUTS" | jq -r '.apiName.value')" >> $GITHUB_OUTPUT
+          echo "WEB_NAME=$(echo "$OUTPUTS" | jq -r '.webName.value')" >> $GITHUB_OUTPUT
+          echo "APP_INSIGHTS_CONN=$(echo "$OUTPUTS" | jq -r '.appInsightsConnectionString.value')" >> $GITHUB_OUTPUT
+          echo "REDIS_HOST=$(echo "$OUTPUTS" | jq -r '.redisHost.value')" >> $GITHUB_OUTPUT
+          echo "REDIS_NAME=$(echo "$OUTPUTS" | jq -r '.redisName.value')" >> $GITHUB_OUTPUT
+          echo "SB_NAMESPACE=$(echo "$OUTPUTS" | jq -r '.sbNamespace.value')" >> $GITHUB_OUTPUT
+          echo "STG_NAME=$(echo "$OUTPUTS" | jq -r '.storageAccountName.value')" >> $GITHUB_OUTPUT
+          echo "PG_FQDN=$(echo "$OUTPUTS" | jq -r '.pgFqdn.value')" >> $GITHUB_OUTPUT
+          echo "PG_DB=$(echo "$OUTPUTS" | jq -r '.pgDatabase.value')" >> $GITHUB_OUTPUT
+
+
 
       - name: Setup Key Vault RBAC (if enabled)
         if: inputs.enable_kv_rbac == true
@@ -398,12 +421,12 @@ jobs:
           fi
           
           echo "✅ Key Vault RBAC setup completed"
-      - name: Ensure system-assigned identities on apps
+      - name: Ensure system-assigned identities on apps (idempotent)
         if: inputs.configure_app_services == true
         shell: bash
         env:
-          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
-          WEB_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).webName.value }}
+          API_NAME: ${{ steps.out.outputs.API_NAME }}
+          WEB_NAME: ${{ steps.out.outputs.WEB_NAME }}
         run: |
           set -e
           echo "Enabling system-assigned managed identity on API and Web apps..."
@@ -417,12 +440,12 @@ jobs:
             --output none || true
           echo " Managed identities enabled"
 
-      - name: Ensure KV access for API managed identity
+      - name: Ensure KV access for API identity (idempotent)
         if: inputs.configure_app_services == true
         shell: bash
         env:
-          KV_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).kvName.value }}
-          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
+          KV_NAME: ${{ steps.out.outputs.KV_NAME }}
+          API_NAME: ${{ steps.out.outputs.API_NAME }}
         run: |
           set -e
           KV_ID=$(az keyvault show \
@@ -469,11 +492,11 @@ jobs:
             fi
           done
 
-      - name: Validate connection strings in Key Vault
+      - name: Compute connection strings and store in KV
         if: inputs.configure_app_services == true
         shell: bash
         env:
-          KV_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).kvName.value }}
+          KV_NAME: ${{ steps.out.outputs.KV_NAME }}
         run: |
           set -e
           echo "Validating connection string secrets created by Bicep..."
@@ -514,14 +537,14 @@ jobs:
           echo " All connection strings validated"
 
 
-      - name: Configure App Service settings
+      - name: Set App Service settings
         if: inputs.configure_app_services == true
         shell: bash
         env:
-          KV_URI: ${{ fromJSON(steps.deploy.outputs.outputs).kvUri.value }}
-          APP_INSIGHTS_CONN: ${{ fromJSON(steps.deploy.outputs.outputs).appInsightsConnectionString.value }}
-          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
-          WEB_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).webName.value }}
+          KV_URI: ${{ steps.out.outputs.KV_URI }}
+          APP_INSIGHTS_CONN: ${{ steps.out.outputs.APP_INSIGHTS_CONN }}
+          API_NAME: ${{ steps.out.outputs.API_NAME }}
+          WEB_NAME: ${{ steps.out.outputs.WEB_NAME }}
           AAD_AUTHORITY: ${{ secrets.AAD_B2C_AUTHORITY }}
           AAD_CLIENT_ID: ${{ secrets.AAD_B2C_CLIENT_ID }}
           AAD_API_SCOPE: ${{ secrets.AAD_B2C_API_SCOPE }}
@@ -578,11 +601,11 @@ jobs:
           
           echo " Web app settings configured"
 
-      - name: Disable Easy Auth on API
+      - name: Ensure Easy Auth disabled on API (idempotent)
         if: inputs.disable_easy_auth == true
         shell: bash
         env:
-          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
+          API_NAME: ${{ steps.out.outputs.API_NAME }}
         run: |
           echo "Disabling App Service Authentication (Easy Auth) on $API_NAME"
           az webapp auth set \
