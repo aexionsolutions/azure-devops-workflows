@@ -345,7 +345,7 @@ jobs:
             --name "${{ inputs.deployment_name }}" \
             --query properties.outputs -o json)
           
-          echo "outputs=$OUTPUTS" >> $GITHUB_OUTPUT
+          echo "outputs<<EOF" >> $GITHUB_OUTPUT; echo "$OUTPUTS" >> $GITHUB_OUTPUT; echo "EOF" >> $GITHUB_OUTPUT
           echo "Deployment outputs:"
           echo "$OUTPUTS" | jq .
 
