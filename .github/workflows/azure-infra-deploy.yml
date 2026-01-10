@@ -398,6 +398,85 @@ jobs:
           fi
           
           echo "✅ Key Vault RBAC setup completed"
+      - name: Configure App Service settings
+        if: inputs.configure_app_services == true
+        shell: bash
+        env:
+          KV_URI: ${{ fromJSON(steps.deploy.outputs.outputs).kvUri.value }}
+          APP_INSIGHTS_CONN: ${{ fromJSON(steps.deploy.outputs.outputs).appInsightsConnectionString.value }}
+          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
+          WEB_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).webName.value }}
+          AAD_AUTHORITY: ${{ secrets.AAD_B2C_AUTHORITY }}
+          AAD_CLIENT_ID: ${{ secrets.AAD_B2C_CLIENT_ID }}
+          AAD_API_SCOPE: ${{ secrets.AAD_B2C_API_SCOPE }}
+        run: |
+          set -e
+          
+          echo "Configuring App Service settings with Key Vault references..."
+          
+          # Set API app settings with Key Vault references
+          API_SETTINGS=(
+            "ASPNETCORE_ENVIRONMENT=Production"
+            "APPLICATIONINSIGHTS_CONNECTION_STRING=$APP_INSIGHTS_CONN"
+            "Storage__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/StorageConnectionString)"
+            "Redis__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/RedisConnectionString)"
+            "ServiceBus__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/ServiceBusConnectionString)"
+            "ConnectionStrings__Postgres=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/PostgresConnectionString)"
+            "Auth:Mode=b2c"
+          )
+          
+          # Add AAD B2C settings if provided
+          if [ -n "$AAD_CLIENT_ID" ]; then 
+            API_SETTINGS+=("Auth:ClientId=$AAD_CLIENT_ID")
+          fi
+          if [ -n "$AAD_AUTHORITY" ]; then 
+            API_SETTINGS+=("Auth:B2C:Authority=$AAD_AUTHORITY")
+          fi
+          if [ -n "$AAD_API_SCOPE" ]; then
+            # Extract audience from scope (api://GUID/Scope  api://GUID)
+            AUDIENCE_URI=$(echo "$AAD_API_SCOPE" | sed 's|^\(api://[^/]*\)/.*|\1|; t; s|^\([^/]*\)/.*|\1|')
+            API_SETTINGS+=("Auth:Audience=$AUDIENCE_URI")
+          fi
+          
+          az webapp config appsettings set \
+            -g "${{ inputs.resource_group }}" \
+            -n "$API_NAME" \
+            --settings "${API_SETTINGS[@]}" \
+            --output none
+          
+          echo " API app settings configured"
+          
+          # Set Web app settings
+          WEB_SETTINGS="APPLICATIONINSIGHTS_CONNECTION_STRING=$APP_INSIGHTS_CONN API_BASE=https://${API_NAME}.azurewebsites.net NEXT_PUBLIC_API_BASE=https://${API_NAME}.azurewebsites.net WEBSITE_NODE_DEFAULT_VERSION=~20"
+          
+          # Add AAD settings if provided (both runtime and build-time vars)
+          if [ -n "$AAD_AUTHORITY" ]; then
+            WEB_SETTINGS="$WEB_SETTINGS AAD_AUTHORITY=$AAD_AUTHORITY NEXT_PUBLIC_AAD_AUTHORITY=$AAD_AUTHORITY AAD_CLIENT_ID=$AAD_CLIENT_ID NEXT_PUBLIC_AAD_CLIENT_ID=$AAD_CLIENT_ID AAD_API_SCOPE=$AAD_API_SCOPE NEXT_PUBLIC_AAD_API_SCOPE=$AAD_API_SCOPE"
+          fi
+          
+          az webapp config appsettings set \
+            -g "${{ inputs.resource_group }}" \
+            -n "$WEB_NAME" \
+            --settings $WEB_SETTINGS \
+            --output none
+          
+          echo " Web app settings configured"
+
+      - name: Disable Easy Auth on API
+        if: inputs.disable_easy_auth == true
+        shell: bash
+        env:
+          API_NAME: ${{ fromJSON(steps.deploy.outputs.outputs).apiName.value }}
+        run: |
+          echo "Disabling App Service Authentication (Easy Auth) on $API_NAME"
+          az webapp auth set \
+            -g "${{ inputs.resource_group }}" \
+            -n "$API_NAME" \
+            --enabled false \
+            --output none || true
+          echo " Easy Auth disabled"
+
+
 
       - name: Deployment Summary
         shell: bash
