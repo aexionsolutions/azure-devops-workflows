@@ -34,8 +34,13 @@ on:
       web_working_directory:
         required: false
         type: string
-        description: 'Working directory for web tests (vitest)'
+        description: 'Working directory for web unit tests (vitest)'
         default: 'web'
+      run_web_unit_tests:
+        required: false
+        type: boolean
+        description: 'Run web unit tests with vitest (skip if repo does not have vitest yet)'
+        default: false
     secrets:
       SONAR_TOKEN:
         required: false
@@ -234,6 +239,7 @@ jobs:
             exit 1
           fi
       - name: Web unit tests + coverage (vitest)
+        if: inputs.run_web_unit_tests == true
         working-directory: ${{ inputs.web_working_directory }}
         run: |
           rm -f package-lock.json
@@ -241,11 +247,11 @@ jobs:
           npm run test:ci
 
       - name: Upload web coverage artifact
-        if: always()
+        if: always() && inputs.run_web_unit_tests == true
         uses: actions/upload-artifact@v5
         with:
-          name: tems-web-coverage
-          path: tems-web/coverage/**
+          name: web-coverage
+          path: ${{ inputs.web_working_directory }}/coverage/**
           if-no-files-found: warn
           retention-days: 7
 
