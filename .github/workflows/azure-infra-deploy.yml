@@ -57,24 +57,7 @@ on:
         required: true
         type: string
       
-      # Azure AD B2C (Optional)
-      aad_b2c_authority:
-        description: 'Azure AD B2C authority URL (optional)'
-        required: false
-        type: string
-        default: ''
       
-      aad_b2c_client_id:
-        description: 'Azure AD B2C client ID (optional)'
-        required: false
-        type: string
-        default: ''
-      
-      aad_b2c_api_scope:
-        description: 'Azure AD B2C API scope (optional)'
-        required: false
-        type: string
-        default: ''
       
       # Feature Flags
       enable_kv_rbac:
@@ -105,6 +88,18 @@ on:
       POSTGRES_ADMIN_PASSWORD:
         description: 'PostgreSQL administrator password'
         required: true
+
+      AAD_B2C_AUTHORITY:
+        description: 'Azure AD B2C authority URL (optional)'
+        required: false
+
+      AAD_B2C_CLIENT_ID:
+        description: 'Azure AD B2C client ID (optional)'
+        required: false
+
+      AAD_B2C_API_SCOPE:
+        description: 'Azure AD B2C API scope (optional)'
+        required: false
       
       AZURE_CREDENTIALS:
         description: 'Azure service principal JSON (fallback authentication)'
@@ -305,9 +300,9 @@ jobs:
         shell: bash
         env:
           PG_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
-          AAD_AUTHORITY: ${{ inputs.aad_b2c_authority }}
-          AAD_CLIENT_ID: ${{ inputs.aad_b2c_client_id }}
-          AAD_API_SCOPE: ${{ inputs.aad_b2c_api_scope }}
+          AAD_AUTHORITY: ${{ secrets.AAD_B2C_AUTHORITY }}
+          AAD_CLIENT_ID: ${{ secrets.AAD_B2C_CLIENT_ID }}
+          AAD_API_SCOPE: ${{ secrets.AAD_B2C_API_SCOPE }}
         run: |
           set -e
           az deployment group create \
