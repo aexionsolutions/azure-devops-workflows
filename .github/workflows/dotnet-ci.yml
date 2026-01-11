@@ -45,6 +45,11 @@ on:
         type: boolean
         description: 'Run web unit tests with vitest (skip if repo does not have vitest yet)'
         default: false
+      enforce_coverage:
+        required: false
+        type: boolean
+        description: 'Enforce coverage thresholds. Set to false for time-travel testing (e.g., promote-release) where coverage was already validated.'
+        default: true
     secrets:
       SONAR_TOKEN:
         required: false
@@ -306,7 +311,7 @@ jobs:
           echo "::notice::Code changed: $CODE_CHANGED"
 
       - name: Enforce coverage threshold (final)
-        if: steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && steps.code_changes.outputs.CODE_CHANGED == 'true'
+        if: inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && steps.code_changes.outputs.CODE_CHANGED == 'true'
         shell: bash
         run: |
           echo "::error::Coverage threshold not met - see coverage check step for details"
