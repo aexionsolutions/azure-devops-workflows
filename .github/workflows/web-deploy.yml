@@ -92,7 +92,23 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
 
-      - uses: ./.github/actions/derive-version
+      - name: Derive version
+        id: derive_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            VERSION="${{ inputs.release_tag }}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          # Strip 'v' prefix if present (v0.1.0 → 0.1.0)
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Derived version: $VERSION"
 
       - name: Determine seed mode
         id: mode
@@ -119,8 +135,18 @@ jobs:
             # Skip lint and test during artifact build (run in CI workflows instead)
             # npm run lint --if-present
             # npm test --if-present
-            npx playwright install --with-deps || true  # Install browsers if needed
             npm run build
+
+      - name: Install Playwright browsers
+        if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed'
+        shell: bash
+        run: |
+          # Install Playwright browsers with OS-appropriate flags
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            npx playwright install --with-deps chromium || true
+          else
+            npx playwright install chromium || true
+          fi
 
       - name: "Package web (slim zip: standalone)"
         if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed'

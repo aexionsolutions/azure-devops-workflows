@@ -117,7 +117,21 @@ jobs:
 
       - name: Derive version
         id: derive_version
-        uses: ./.github/actions/derive-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            VERSION="${{ inputs.release_tag }}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          # Strip 'v' prefix if present (v0.1.0 → 0.1.0)
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Derived version: $VERSION"
 
       - name: Detect SonarCloud settings
         id: sonar
