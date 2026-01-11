@@ -1,8 +1,12 @@
-﻿name: Reusable .NET CI
+name: Reusable .NET CI
 
 on:
   workflow_call:
     inputs:
+      git_ref:
+        description: 'Git ref (tag/sha/branch) to test. Required for promote-release to ensure tests match the build version.'
+        required: false
+        type: string
       solution:
         required: true
         type: string
@@ -85,7 +89,9 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.git_ref || github.ref }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

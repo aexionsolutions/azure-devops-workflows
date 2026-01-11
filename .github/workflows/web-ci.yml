@@ -1,8 +1,12 @@
-﻿name: Reusable Web CI (Next.js)
+name: Reusable Web CI (Next.js)
 
 on:
   workflow_call:
     inputs:
+      git_ref:
+        description: 'Git ref (tag/sha/branch) to test. Required for promote-release to ensure tests match the build version.'
+        required: false
+        type: string
       working_directory:
         required: false
         type: string
@@ -21,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
