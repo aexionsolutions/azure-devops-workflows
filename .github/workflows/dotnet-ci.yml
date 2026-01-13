@@ -179,13 +179,18 @@ jobs:
           
           # Coverage report generation (exclude test assemblies from coverage)
           dotnet tool install -g dotnet-reportgenerator-globaltool || true
-          # Determine assembly filters (exclude test assemblies + custom filters)
-          ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
-          if [ -z "$ASSEMBLY_FILTERS" ]; then
-            # Auto-detect test assemblies by looking at test project names
-            TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
-            if [ -n "$TEST_PROJECTS" ]; then
-              ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+          # Determine assembly filters (always exclude test assemblies + custom filters)
+          # Auto-detect test assemblies by looking at test project names
+          TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
+          if [ -n "$TEST_PROJECTS" ]; then
+            ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+          fi
+          # Append custom filters if provided
+          if [ -n "${{ inputs.coverage_assembly_filters }}" ]; then
+            if [ -n "$ASSEMBLY_FILTERS" ]; then
+              ASSEMBLY_FILTERS="$ASSEMBLY_FILTERS;${{ inputs.coverage_assembly_filters }}"
+            else
+              ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
             fi
           fi
           
@@ -226,13 +231,18 @@ jobs:
           # Re-generate summary to ensure we include all coverage files (unit + integration when enabled)
           dotnet tool install -g dotnet-reportgenerator-globaltool || true
           
-          # Determine assembly filters (exclude test assemblies + custom filters)
-          ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
-          if [ -z "$ASSEMBLY_FILTERS" ]; then
-            # Auto-detect test assemblies by looking at test project names
-            TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
-            if [ -n "$TEST_PROJECTS" ]; then
-              ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+          # Determine assembly filters (always exclude test assemblies + custom filters)
+          # Auto-detect test assemblies by looking at test project names
+          TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
+          if [ -n "$TEST_PROJECTS" ]; then
+            ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+          fi
+          # Append custom filters if provided
+          if [ -n "${{ inputs.coverage_assembly_filters }}" ]; then
+            if [ -n "$ASSEMBLY_FILTERS" ]; then
+              ASSEMBLY_FILTERS="$ASSEMBLY_FILTERS;${{ inputs.coverage_assembly_filters }}"
+            else
+              ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
             fi
           fi
           
