@@ -1,0 +1,68 @@
+name: "Azure Login (smart OIDC or SP)"
+description: "Logs into Azure using OIDC if client/tenant/subscription are provided; otherwise falls back to service principal secret JSON. Outputs 'mode' (oidc|sp)."
+inputs:
+  client-id:
+    description: Application (client) ID for OIDC
+    required: false
+  tenant-id:
+    description: Directory (tenant) ID for OIDC
+    required: false
+  subscription-id:
+    description: Subscription ID for OIDC
+    required: false
+  creds:
+    description: Service principal credentials JSON (for fallback)
+    required: false
+outputs:
+  mode:
+    description: Which login mode was used (oidc|sp)
+    value: ${{ steps.decide.outputs.mode }}
+runs:
+  using: composite
+  steps:
+    - id: decide
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.client-id }}" ] && [ -n "${{ inputs.tenant-id }}" ] && [ -n "${{ inputs.subscription-id }}" ]; then
+          echo "mode=oidc" >> $GITHUB_OUTPUT
+        else
+          echo "mode=sp" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Azure login (OIDC)
+      if: steps.decide.outputs.mode == 'oidc'
+      continue-on-error: true
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - id: probe
+      shell: bash
+      run: |
+        if az account show -o none 2>/dev/null; then
+          echo "logged_in=true" >> $GITHUB_OUTPUT
+        else
+          echo "logged_in=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Azure login (service principal secret)
+      if: (steps.decide.outputs.mode == 'sp' || steps.probe.outputs.logged_in == 'false') && inputs.creds != ''
+      uses: azure/login@v2
+      with:
+        creds: ${{ inputs.creds }}
+
+    - name: Note missing SP creds for fallback
+      if: (steps.decide.outputs.mode == 'sp' || steps.probe.outputs.logged_in == 'false') && inputs.creds == ''
+      shell: bash
+      run: |
+        echo "No service principal 'creds' JSON provided for fallback. If OIDC fails, set 'creds' input (GitHub secret with az ad sp create-for-rbac output) or fix the federated credential for this workflow." >&2
+
+    - name: Verify Azure login
+      shell: bash
+      run: |
+        if ! az account show -o none 2>/dev/null; then
+          echo "Azure login failed via both OIDC and Service Principal. If using OIDC, ensure your federated credential subject matches this job (either ref:refs/heads/<branch> or environment:<env>). If using SP, ensure 'creds' JSON is present." >&2
+          exit 1
+        fi

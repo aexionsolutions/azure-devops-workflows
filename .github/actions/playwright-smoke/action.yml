@@ -1,0 +1,51 @@
+﻿name: "Playwright Smoke"
+description: "Installs deps, runs Playwright tests against a BASE_URL, uploads report/traces/videos as artifacts."
+inputs:
+  working-directory:
+    description: Path to the web app with Playwright config
+    required: false
+    default: web/tems-portal
+  base-url:
+    description: Base URL to test against
+    required: true
+  artifact-name:
+    description: Artifact name prefix
+    required: true
+  run-auth-smoke:
+    description: Run deployed real-auth smoke (B2C popup login + /api/ping)
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Install and run Playwright
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_URL: ${{ inputs.base-url }}
+      run: |
+        npm ci --ignore-scripts || npm i --ignore-scripts
+        npx playwright install --with-deps
+        # Run smoke tests only (no auth-dependent tests)
+        npm run test:e2e:smoke
+
+    - name: Deployed auth smoke (real B2C)
+      if: ${{ inputs.run-auth-smoke == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_URL: ${{ inputs.base-url }}
+      run: |
+        # Requires B2C_TEST_USER_EMAIL / B2C_TEST_USER_PASSWORD env vars set by the caller.
+        npm run test:e2e:deployed-auth-smoke
+
+    - name: Upload Playwright artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ inputs.working-directory }}/playwright-report/**
+          ${{ inputs.working-directory }}/test-results/**
+        if-no-files-found: ignore
+        retention-days: 7

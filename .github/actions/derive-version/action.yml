@@ -1,0 +1,36 @@
+name: "Derive Version"
+description: "Derive VERSION, SHORT_SHA, BUILD_DATE from ref/commit"
+outputs:
+  version:
+    description: "Derived version"
+    value: ${{ steps.derive.outputs.version }}
+  short_sha:
+    description: "Short SHA"
+    value: ${{ steps.derive.outputs.short_sha }}
+  build_date:
+    description: "UTC build date"
+    value: ${{ steps.derive.outputs.build_date }}
+runs:
+  using: "composite"
+  steps:
+    - id: derive
+      shell: bash
+      run: |
+        set -euo pipefail
+        SHORT_SHA="${GITHUB_SHA::7}"
+        if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          VERSION="${GITHUB_REF_NAME}"
+        else
+          VERSION="0.0.0+${SHORT_SHA}"
+        fi
+        BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        echo "SHORT_SHA=$SHORT_SHA"       >> $GITHUB_ENV
+        echo "VERSION=$VERSION"           >> $GITHUB_ENV
+        echo "BUILD_DATE=$BUILD_DATE"     >> $GITHUB_ENV
+
+        echo "version=$VERSION"       >> $GITHUB_OUTPUT
+        echo "short_sha=$SHORT_SHA"    >> $GITHUB_OUTPUT
+        echo "build_date=$BUILD_DATE"  >> $GITHUB_OUTPUT
+
+        echo "Derived: VERSION=$VERSION SHORT_SHA=$SHORT_SHA BUILD_DATE=$BUILD_DATE"

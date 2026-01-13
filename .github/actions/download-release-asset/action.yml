@@ -1,0 +1,89 @@
+name: Download Release Asset
+
+description: Downloads a single asset from a GitHub Release by tag
+
+inputs:
+  repo:
+    description: 'owner/repo (default: current repository)'
+    required: false
+    default: ''
+  tag:
+    description: Release tag name (e.g., v1.2.3)
+    required: true
+  asset_name:
+    description: Name of the asset to download (e.g., api.zip)
+    required: true
+  token:
+    description: GitHub token (GITHUB_TOKEN or PAT)
+    required: true
+  out_path:
+    description: Where to save the downloaded file (defaults to asset_name in CWD)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve repo and out path
+      id: res
+      shell: bash
+      env:
+        REPO_IN: ${{ inputs.repo }}
+        TAG: ${{ inputs.tag }}
+        NAME: ${{ inputs.asset_name }}
+        OUT_IN: ${{ inputs.out_path }}
+      run: |
+        set -e
+        if [ -z "$REPO_IN" ]; then
+          REPO="${GITHUB_REPOSITORY}"
+        else
+          REPO="$REPO_IN"
+        fi
+        if [ -z "$OUT_IN" ]; then
+          OUT="$NAME"
+        else
+          OUT="$OUT_IN"
+        fi
+        echo "repo=$REPO" >> $GITHUB_OUTPUT
+        echo "out=$OUT" >> $GITHUB_OUTPUT
+
+    - name: Download asset (supports draft/prerelease)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ steps.res.outputs.repo }}
+        TAG: ${{ inputs.tag }}
+        NAME: ${{ inputs.asset_name }}
+        OUT: ${{ steps.res.outputs.out }}
+      run: |
+        set -euo pipefail
+        
+        # Create output directory if it doesn't exist
+        OUT_DIR=$(dirname "$OUT")
+        if [ "$OUT_DIR" != "." ] && [ ! -d "$OUT_DIR" ]; then
+          echo "Creating directory: $OUT_DIR"
+          mkdir -p "$OUT_DIR"
+        fi
+        
+        # Use gh CLI to download the asset - it handles auth and binary downloads correctly
+        echo "Downloading $NAME from release $TAG in $REPO"
+        gh release download "$TAG" \
+          --repo "$REPO" \
+          --pattern "$NAME" \
+          --output "$OUT" \
+          --clobber
+        
+        # Verify the download
+        if [ ! -f "$OUT" ]; then
+          echo "ERROR: Failed to download $NAME" >&2
+          exit 1
+        fi
+        
+        FILE_SIZE=$(stat -c%s "$OUT" 2>/dev/null || stat -f%z "$OUT" 2>/dev/null || echo '0')
+        if [ "$FILE_SIZE" -eq 0 ]; then
+          echo "ERROR: Downloaded file is empty" >&2
+          exit 1
+        fi
+        
+        echo "Downloaded $NAME to $OUT (size: $FILE_SIZE bytes)"
+        file "$OUT" || true

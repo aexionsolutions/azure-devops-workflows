@@ -1,0 +1,93 @@
+﻿name: SonarCloud .NET Begin
+
+description: Install SonarScanner for .NET and start analysis (begin)
+
+inputs:
+  token:
+    description: SonarCloud token
+    required: true
+  org:
+    description: SonarCloud organization key
+    required: true
+  projectKey:
+    description: SonarCloud project key
+    required: true
+  branch:
+    description: Branch name to attribute analysis to
+    required: false
+    default: ""
+  cobertura_glob:
+    description: Cobertura report glob for C# coverage
+    required: false
+    default: "**/TestResults/**/coverage.opencover.xml"
+  pr_key:
+    description: Pull request number (for PR analysis)
+    required: false
+    default: ""
+  pr_branch:
+    description: Pull request branch name (head)
+    required: false
+    default: ""
+  pr_base:
+    description: Pull request base branch name
+    required: false
+    default: ""
+  js_lcov:
+    description: Path to JS/TS lcov report (for web coverage)
+    required: false
+    default: "web/tems-portal/coverage/lcov.info"
+
+runs:
+  using: composite
+  steps:
+    - name: Install SonarScanner for .NET
+      shell: bash
+      run: dotnet tool install --global dotnet-sonarscanner || true
+
+    - name: SonarCloud Begin
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        SONAR_ORG: ${{ inputs.org }}
+        SONAR_PROJECT_KEY: ${{ inputs.projectKey }}
+        BRANCH: ${{ inputs.branch }}
+        COB_GLOB: ${{ inputs.cobertura_glob }}
+        PR_KEY: ${{ inputs.pr_key }}
+        PR_BRANCH: ${{ inputs.pr_branch }}
+        PR_BASE: ${{ inputs.pr_base }}
+        JS_LCOV: ${{ inputs.js_lcov }}
+      run: |
+        set -e
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        # Force project base dir to the repository root for consistent behavior across Scanner v8+ changes
+        PBDIR="${GITHUB_WORKSPACE:-$(pwd)}"
+        ARGS=(
+          "/o:${SONAR_ORG}"
+          "/k:${SONAR_PROJECT_KEY}"
+          "/d:sonar.host.url=https://sonarcloud.io"
+          "/d:sonar.token=${SONAR_TOKEN}"
+          "/d:sonar.cs.opencover.reportsPaths=${COB_GLOB}"
+          "/d:sonar.projectBaseDir=${PBDIR}"
+          "/d:sonar.scanner.scanAll=true"
+          "/d:sonar.sources=."
+          "/d:sonar.exclusions=**/bin/**,**/obj/**,**/node_modules/**,**/.next/**,**/coverage/**,**/dist/**,**/out/**,**/.github/workflows/**,**/Program.cs,docs/tools/**,setup-oidc.ps1,infra/tems-infra/azure/modules/**/*.bicep"
+          "/d:sonar.coverage.exclusions=**/*.g.cs,**/*.generated.cs,**/*Designer.cs,**/Migrations/**,**/bin/**,**/obj/**,**/Program.cs,web/tems-portal/next-env.d.ts,**/*.d.ts,**/*.css,web/tems-portal/eslint.config.mjs,web/tems-portal/postcss.config.mjs,web/tems-portal/vitest.config.ts,web/tems-portal/vitest.setup.ts,web/tems-portal/tsconfig.json,web/tems-portal/next.config.ts,web/tems-portal/next.config.mjs,web/tems-portal/playwright.config.ts,web/tems-portal/playwright.config.js,web/tems-portal/playwright.prod.config.ts,web/tems-portal/server.js,web/tems-portal/tests/**"
+          "/d:sonar.cpd.exclusions=**/Migrations/**/*.cs,**/*.Designer.cs,**/*.generated.cs,**/*ModelSnapshot.cs"
+          "/d:sonar.test.inclusions=**/*.Tests/**,**/*Tests.cs,**/*.spec.ts,**/*.test.ts,**/*.spec.tsx,**/*.test.tsx"
+          "/d:sonar.cs.vstest.reportsPaths=**/TestResults/**/*.trx"
+        )
+        # JS/TS coverage (lcov) for web
+        if [ -n "$JS_LCOV" ]; then
+          ARGS+=("/d:sonar.javascript.lcov.reportPaths=${JS_LCOV}")
+        fi
+        # If PR metadata is provided, configure PR analysis and DO NOT set branch name
+        if [ -n "$PR_KEY" ] && [ -n "$PR_BRANCH" ] && [ -n "$PR_BASE" ]; then
+          ARGS+=(
+            "/d:sonar.pullrequest.key=${PR_KEY}"
+            "/d:sonar.pullrequest.branch=${PR_BRANCH}"
+            "/d:sonar.pullrequest.base=${PR_BASE}"
+          )
+        elif [ -n "$BRANCH" ]; then
+          ARGS+=("/d:sonar.branch.name=${BRANCH}")
+        fi
+        dotnet sonarscanner begin "${ARGS[@]}"

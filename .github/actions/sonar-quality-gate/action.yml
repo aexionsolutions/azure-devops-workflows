@@ -1,0 +1,90 @@
+name: "SonarCloud Quality Gate"
+description: "Polls SonarCloud for Quality Gate and writes status to Job Summary. Non-blocking by default with input to fail on failure."
+inputs:
+  projectKey:
+    description: SonarCloud project key
+    required: true
+  token:
+    description: SonarCloud token
+    required: true
+  branch:
+    description: Branch name (omit for main project status)
+    required: false
+  pullRequest:
+    description: PR number (for PR-specific gate)
+    required: false
+  fail-on-failure:
+    description: If true, exit non-zero when gate fails
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        SONAR_PROJECT_KEY: ${{ inputs.projectKey }}
+        BRANCH: ${{ inputs.branch }}
+        PR: ${{ inputs.pullRequest }}
+        FAIL: ${{ inputs['fail-on-failure'] }}
+      run: |
+        base="https://sonarcloud.io/api/qualitygates/project_status?projectKey=$SONAR_PROJECT_KEY"
+        if [ -n "$PR" ]; then base="$base&pullRequest=$PR"; fi
+        if [ -n "$BRANCH" ] && [ -z "$PR" ]; then base="$base&branch=$BRANCH"; fi
+        # Short initial delay to let Sonar background tasks complete
+        if [ -n "$PR" ]; then sleep 10; fi
+        for i in {1..60}; do
+          resp=$(curl -s -u "$SONAR_TOKEN:" "$base")
+          status=$(echo "$resp" | jq -r '.projectStatus.status // empty')
+          echo "Attempt $i: status=$status"
+          # SonarCloud sometimes returns status=NONE while background tasks are still running.
+          # Treat NONE as "not ready yet" and keep polling.
+          if [ -z "$status" ] || [ "$status" = "NONE" ]; then
+            sleep 5
+            continue
+          fi
+          if [ -n "$status" ]; then
+            echo "### SonarCloud Quality Gate: $status" >> "$GITHUB_STEP_SUMMARY"
+            # Render failing conditions for better diagnostics
+            if [ "$status" != "OK" ]; then
+              echo "Failing conditions:" 1>&2
+              echo "$resp" | jq -r '.projectStatus.conditions[] | select(.status=="ERROR") | "- metric=\(.metricKey) actual=\(.actualValue // "-") comparator=\(.comparator // "-") threshold=\(.errorThreshold // "-")"' 1>&2
+              # Additionally list new vulnerabilities and hotspots to speed triage
+              if [ -n "$PR" ]; then
+                ISSUES_URL="https://sonarcloud.io/api/issues/search?projectKeys=$SONAR_PROJECT_KEY&pullRequest=$PR&types=VULNERABILITY&isNew=true&ps=50"
+                HOTSPOTS_URL="https://sonarcloud.io/api/hotspots/search?projectKey=$SONAR_PROJECT_KEY&pullRequest=$PR&status=TO_REVIEW&ps=50"
+              elif [ -n "$BRANCH" ]; then
+                ISSUES_URL="https://sonarcloud.io/api/issues/search?projectKeys=$SONAR_PROJECT_KEY&branch=$BRANCH&types=VULNERABILITY&isNew=true&ps=50"
+                HOTSPOTS_URL="https://sonarcloud.io/api/hotspots/search?projectKey=$SONAR_PROJECT_KEY&branch=$BRANCH&status=TO_REVIEW&ps=50"
+              else
+                ISSUES_URL="https://sonarcloud.io/api/issues/search?projectKeys=$SONAR_PROJECT_KEY&types=VULNERABILITY&isNew=true&ps=50"
+                HOTSPOTS_URL="https://sonarcloud.io/api/hotspots/search?projectKey=$SONAR_PROJECT_KEY&status=TO_REVIEW&ps=50"
+              fi
+              echo "New vulnerabilities:" 1>&2
+              curl -s -u "$SONAR_TOKEN:" "$ISSUES_URL" | jq -r '.issues[]? | "- [\(.severity)] \(.message) (\(.component):\(.line // 0))"' 1>&2 || true
+              echo "New hotspots (to review):" 1>&2
+              curl -s -u "$SONAR_TOKEN:" "$HOTSPOTS_URL" | jq -r '.hotspots[]? | "- [\(.securityCategory)] \(.message) (\(.component):\(.line // 0))"' 1>&2 || true
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "<details><summary>Failing conditions</summary>" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '| Metric | Actual | Operator | Error Threshold |' >> "$GITHUB_STEP_SUMMARY"
+              echo '|---|---:|:--:|---:|' >> "$GITHUB_STEP_SUMMARY"
+              echo "$resp" | jq -r '.projectStatus.conditions[] | select(.status=="ERROR") | "| \(.metricKey) | \(.actualValue // "-") | \(.comparator // "-") | \(.errorThreshold // "-") |"' >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "<details><summary>New vulnerabilities</summary>" >> "$GITHUB_STEP_SUMMARY"
+              curl -s -u "$SONAR_TOKEN:" "$ISSUES_URL" | jq -r '.issues[]? | "- [\(.severity)] \(.message) (\(.component):\(.line // 0))"' >> "$GITHUB_STEP_SUMMARY" || true
+              echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "<details><summary>New hotspots (to review)</summary>" >> "$GITHUB_STEP_SUMMARY"
+              curl -s -u "$SONAR_TOKEN:" "$HOTSPOTS_URL" | jq -r '.hotspots[]? | "- [\(.securityCategory)] \(.message) (\(.component):\(.line // 0))"' >> "$GITHUB_STEP_SUMMARY" || true
+              echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ "$status" != "OK" ] && [ "$FAIL" = "true" ]; then exit 1; fi
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "### SonarCloud Quality Gate: timed out" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$FAIL" = "true" ]; then exit 1; fi

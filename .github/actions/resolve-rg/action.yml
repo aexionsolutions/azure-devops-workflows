@@ -1,0 +1,81 @@
+﻿name: "Resolve Resource Group"
+description: "Resolves the Azure Resource Group for the selected environment using per-env overrides or a default."
+inputs:
+  environment:
+    description: Environment name (dev/uat/preprod/prod)
+    required: true
+  default:
+    description: Default RG (fallback)
+    required: false
+  dev:
+    description: RG for dev
+    required: false
+  uat:
+    description: RG for uat
+    required: false
+  preprod:
+    description: RG for preprod
+    required: false
+  prod:
+    description: RG for prod
+    required: false
+  export-var:
+    description: Optional env var name to export the resolved RG to (e.g., RG). If empty, no env export.
+    required: false
+    default: ''
+  verify-exists:
+    description: If 'true', verify the Resource Group exists (requires az login beforehand)
+    required: false
+    default: 'false'
+  fail-on-missing:
+    description: If 'true' and verify-exists is true, fail when RG does not exist (otherwise only warn)
+    required: false
+    default: 'false'
+outputs:
+  resource-group:
+    description: Resolved Azure Resource Group name
+    value: ${{ steps.resolve.outputs.resource-group }}
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        ENV: ${{ inputs.environment }}
+        RG_DEFAULT: ${{ inputs.default }}
+        RG_DEV: ${{ inputs.dev }}
+        RG_UAT: ${{ inputs.uat }}
+        RG_PREPROD: ${{ inputs.preprod }}
+        RG_PROD: ${{ inputs.prod }}
+        EXPORT_VAR: ${{ inputs.export-var }}
+        VERIFY: ${{ inputs.verify-exists }}
+        FAIL_MISSING: ${{ inputs.fail-on-missing }}
+      run: |
+        set -e
+        case "$ENV" in
+          dev) RG_USE="${RG_DEV:-$RG_DEFAULT}" ;;
+          uat) RG_USE="${RG_UAT:-$RG_DEFAULT}" ;;
+          preprod) RG_USE="${RG_PREPROD:-$RG_DEFAULT}" ;;
+          prod) RG_USE="${RG_PROD:-$RG_DEFAULT}" ;;
+          *) RG_USE="$RG_DEFAULT" ;;
+        esac
+        # Pattern fallback if still empty (e.g., when no secrets are set)
+        if [ -z "$RG_USE" ] && [ -n "$ENV" ]; then
+          RG_USE="tems-${ENV}-rg"
+        fi
+        echo "resource-group=$RG_USE" >> $GITHUB_OUTPUT
+        # Optional existence verification
+        if [ "$VERIFY" = "true" ] && [ -n "$RG_USE" ]; then
+          if ! az group show -n "$RG_USE" --query name -o tsv >/dev/null 2>&1; then
+            echo "WARNING: Resource Group '$RG_USE' not found in the current subscription." >&2
+            if [ "$FAIL_MISSING" = "true" ]; then
+              echo "Failing due to fail-on-missing=true." >&2
+              exit 1
+            fi
+          fi
+        fi
+        # Optional env export
+        if [ -n "$EXPORT_VAR" ]; then
+          echo "${EXPORT_VAR}=${RG_USE}" >> $GITHUB_ENV
+          echo "Exported ${EXPORT_VAR}=${RG_USE}" >&2
+        fi

@@ -1,0 +1,47 @@
+name: SonarCloud Detect
+
+description: Detects if SonarCloud analysis should run and exposes an 'enabled' output; also exports SONAR_ENABLED to GITHUB_ENV.
+
+inputs:
+  requested:
+    description: Whether Sonar analysis is requested for this run (true/false)
+    required: false
+    default: 'true'
+  token:
+    description: SonarCloud token
+    required: false
+    default: ''
+  org:
+    description: SonarCloud organization key
+    required: false
+    default: ''
+  projectKey:
+    description: SonarCloud project key
+    required: false
+    default: ''
+
+outputs:
+  enabled:
+    description: true if SonarCloud analysis will run
+    value: ${{ steps.detect.outputs.enabled }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      name: Detect SonarCloud settings
+      shell: bash
+      env:
+        REQ: ${{ inputs.requested }}
+        TOKEN: ${{ inputs.token }}
+        ORG: ${{ inputs.org }}
+        KEY: ${{ inputs.projectKey }}
+      run: |
+        set -e
+        if [ "$REQ" = "true" ] && [ -n "$TOKEN" ] && [ -n "$ORG" ] && [ -n "$KEY" ]; then
+          echo "enabled=true" >> $GITHUB_OUTPUT
+          echo "SONAR_ENABLED=true" >> $GITHUB_ENV
+        else
+          echo "enabled=false" >> $GITHUB_OUTPUT
+          echo "SONAR_ENABLED=false" >> $GITHUB_ENV
+        fi

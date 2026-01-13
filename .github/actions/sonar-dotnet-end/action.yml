@@ -1,0 +1,20 @@
+name: SonarCloud .NET End
+
+description: Complete SonarCloud analysis (end)
+
+inputs:
+  token:
+    description: SonarCloud token
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: SonarCloud End
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+      run: |
+        set -e
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        dotnet sonarscanner end /d:sonar.token="${SONAR_TOKEN}"

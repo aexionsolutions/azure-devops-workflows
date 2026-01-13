@@ -1,0 +1,75 @@
+name: Postgres Start & Wait (Flexible Server)
+
+description: Starts an Azure PostgreSQL Flexible Server (if present) and waits until Ready.
+
+inputs:
+  resource-group:
+    description: Azure Resource Group containing the server
+    required: true
+  server-name:
+    description: PostgreSQL Flexible Server resource name
+    required: true
+  attempts:
+    description: Number of polling attempts (default 60)
+    required: false
+    default: '60'
+  sleep-seconds:
+    description: Seconds to sleep between polls (default 10)
+    required: false
+    default: '10'
+  non-blocking:
+    description: true to skip failure if server does not reach Ready (best-effort start)
+    required: false
+    default: 'false'
+  api-version:
+    description: ARM API version for Flexible Server
+    required: false
+    default: '2024-08-01'
+
+runs:
+  using: composite
+  steps:
+    - name: Start Postgres Flexible Server and wait
+      id: pg
+      shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        PG_NAME: ${{ inputs.server-name }}
+        ATTEMPTS: ${{ inputs.attempts }}
+        SLEEP_SECS: ${{ inputs.sleep-seconds }}
+        NON_BLOCKING: ${{ inputs.non-blocking }}
+        API_VER: ${{ inputs.api-version }}
+      run: |
+        set -e
+        SUB_ID=$(az account show --query id -o tsv)
+        # Check existence
+        if ! az resource show -g "$RG" -n "$PG_NAME" --resource-type Microsoft.DBforPostgreSQL/flexibleServers 1>/dev/null 2>&1; then
+          echo "Postgres server $PG_NAME not found in RG $RG; skipping.";
+          exit 0
+        fi
+        # Attempt to start (best-effort)
+        echo "Starting Postgres server $PG_NAME..."
+        az rest --method post \
+          --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME/start?api-version=$API_VER" \
+          --headers "Content-Type=application/json" || true
+        # Poll until Ready
+        ready=false
+        for i in $(seq 1 "$ATTEMPTS"); do
+          STATE=$(az rest --method get \
+            --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME?api-version=$API_VER" \
+            --query properties.state -o tsv || echo "")
+          echo "[$i/$ATTEMPTS] PG state: ${STATE:-<unknown>}"
+          if [ "$STATE" = "Ready" ]; then ready=true; break; fi
+          sleep "$SLEEP_SECS"
+        done
+        if [ "$ready" != true ]; then
+          echo "Postgres did not reach Ready state within $((ATTEMPTS*SLEEP_SECS)) seconds."
+          if [ "$NON_BLOCKING" = "true" ]; then
+            echo "Continuing (non-blocking)."
+            exit 0
+          else
+            echo "Failing (blocking mode)."
+            exit 1
+          fi
+        fi
+        echo "Postgres is Ready."

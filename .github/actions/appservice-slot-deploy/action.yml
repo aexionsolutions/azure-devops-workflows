@@ -1,0 +1,234 @@
+name: "App Service Slot Deploy"
+description: "Deploys a package to an App Service (staging slot if supported), warms up endpoints, and swaps to production (canary routing removed)."
+inputs:
+  resource-group:
+    description: Azure Resource Group
+    required: true
+  app-name:
+    description: App Service name
+    required: true
+  package:
+    description: Path to package (zip)
+    required: true
+  use-slot:
+    description: true to use staging slot
+    required: true
+  warmup-url-staging:
+    description: URL to warm up staging (ignored if use-slot != true)
+    required: false
+  warmup-url-prod:
+    description: URL to warm up production
+    required: false
+  skip-swap:
+    description: true to skip slot swap (useful when running tests against staging before swap)
+    required: false
+    default: 'false'
+  skip-deploy:
+    description: true to skip the package deploy and only run warm-up/swap steps
+    required: false
+    default: 'false'
+  expect-version:
+    description: Optional version string to verify after warm-up (fails if mismatch)
+    required: false
+    default: ''
+  version-url:
+    description: Optional URL that returns version text/JSON; if not set and warmup-url-prod ends with /healthz, will try replacing with /_meta
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Ensure staging slot exists (if supported)
+      if: inputs.use-slot == 'true'
+      shell: bash
+      run: |
+        az webapp deployment slot create -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --slot staging 2>/dev/null || true
+
+    - name: Ensure staging slot is started
+      if: inputs.use-slot == 'true'
+      uses: ./.github/actions/appservice-ensure-running
+      with:
+        resource-group: ${{ inputs.resource-group }}
+        app-name: ${{ inputs.app-name }}
+        slot: staging
+
+    - name: Deploy package (staging slot)
+      if: inputs.use-slot == 'true' && inputs.skip-deploy != 'true'
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: ${{ inputs.app-name }}
+        slot-name: staging
+        package: ${{ inputs.package }}
+
+    - name: Deploy package (production - no slots)
+      if: inputs.use-slot != 'true' && inputs.skip-deploy != 'true'
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: ${{ inputs.app-name }}
+        package: ${{ inputs.package }}
+
+    - name: Ensure production app is started (no slots)
+      if: inputs.use-slot != 'true'
+      uses: ./.github/actions/appservice-ensure-running
+      with:
+        resource-group: ${{ inputs.resource-group }}
+        app-name: ${{ inputs.app-name }}
+
+    - name: Warm up staging
+      if: inputs.use-slot == 'true' && inputs.warmup-url-staging != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        url='${{ inputs.warmup-url-staging }}'
+        echo "Warming up staging at $url ..."
+        # Increased retries (20) and timeout (15s) to account for:
+        # - Database connection establishment
+        # - EF Core migrations on first startup
+        # - Application initialization (DI container, middlewares)
+        for i in {1..20}; do
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$url" || echo "000")
+          if [ "$code" = "200" ]; then
+            # Guard against iisnode dev error page returning HTTP 200
+            body=$(curl -sS --connect-timeout 5 --max-time 15 "$url" | head -n 50 || true)
+            if echo "$body" | grep -qi "iisnode encountered an error"; then
+              echo "Received iisnode error page (HTTP 200) – continuing retries..."
+            else
+              echo "Staging warm (HTTP 200)"; exit 0
+            fi
+          fi
+          echo "Retry $i/20 (HTTP $code)..."; sleep 5
+        done
+        echo "Staging warm-up failed: expected HTTP 200 from $url" >&2
+        echo "staging $url" > "$RUNNER_TEMP/warmup_fail.txt"
+        # Do not exit here; allow log collection step to run and then fail
+        exit 0
+
+    - name: Warm up production (no slots)
+      if: inputs.use-slot != 'true' && inputs.warmup-url-prod != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        url='${{ inputs.warmup-url-prod }}'
+        echo "Warming up production at $url ..."
+        # Increased retries (20) and timeout (15s) to account for:
+        # - Database connection establishment
+        # - EF Core migrations on first startup
+        # - Application initialization (DI container, middlewares)
+        for i in {1..20}; do
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$url" || echo "000")
+          if [ "$code" = "200" ]; then
+            body=$(curl -sS --connect-timeout 5 --max-time 15 "$url" | head -n 50 || true)
+            if echo "$body" | grep -qi "iisnode encountered an error"; then
+              echo "Received iisnode error page (HTTP 200) – continuing retries..."
+            else
+              echo "Prod warm (HTTP 200)"; exit 0
+            fi
+          fi
+          echo "Retry $i/20 (HTTP $code)..."; sleep 5
+        done
+        echo "Production warm-up failed: expected HTTP 200 from $url" >&2
+        echo "prod $url" > "$RUNNER_TEMP/warmup_fail.txt"
+        exit 0
+
+    - name: Swap slots (staging -> production)
+      if: inputs.use-slot == 'true' && inputs.skip-swap != 'true'
+      shell: bash
+      run: |
+        az webapp deployment slot swap -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --slot staging --target-slot production
+
+    - name: Final warm up production
+      if: inputs.warmup-url-prod != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        url='${{ inputs.warmup-url-prod }}'
+        echo "Final warm up at $url ..."
+        # Increased retries (20) and timeout (15s) to account for:
+        # - Database connection establishment
+        # - EF Core migrations on first startup  
+        # - Application initialization (DI container, middlewares)
+        for i in {1..20}; do
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$url" || echo "000")
+          if [ "$code" = "200" ]; then
+            body=$(curl -sS --connect-timeout 5 --max-time 15 "$url" | head -n 50 || true)
+            if echo "$body" | grep -qi "iisnode encountered an error"; then
+              echo "Received iisnode error page (HTTP 200) – continuing retries..."
+            else
+              echo "Prod warm (HTTP 200)"; exit 0
+            fi
+          fi
+          echo "Retry $i/20 (HTTP $code)..."; sleep 5
+        done
+        echo "Final warm-up failed: expected HTTP 200 from $url" >&2
+        echo "final $url" > "$RUNNER_TEMP/warmup_fail.txt"
+        exit 0
+
+    - name: Collect iisnode logs (on warm-up failure)
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -f "$RUNNER_TEMP/warmup_fail.txt" ]; then
+          mkdir -p _logs || true
+          echo "Collecting App Service logs for ${{ inputs.app-name }}..."
+          # Try prod logs
+          timeout 180s az webapp log download -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --log-file _logs/prod_logs.zip 2>/dev/null || true
+          # Try staging logs as well (if slot exists)
+          timeout 180s az webapp log download -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --slot staging --log-file _logs/staging_logs.zip 2>/dev/null || true
+        fi
+
+    - name: Upload logs artifact (on warm-up failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: appservice-logs-${{ inputs.app-name }}
+        path: _logs
+        if-no-files-found: ignore
+
+    - name: Fail if warm-up failed
+      if: always()
+      shell: bash
+      run: |
+        if [ -f "$RUNNER_TEMP/warmup_fail.txt" ]; then
+          echo "Warm-up failed. Logs uploaded as artifact appservice-logs-${{ inputs.app-name }}" >&2
+          exit 1
+        fi
+
+    - name: Verify expected version (post warm-up)
+      if: inputs.expect-version != ''
+      shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        APP: ${{ inputs.app-name }}
+        EXPECT: ${{ inputs.expect-version }}
+        WARM: ${{ inputs.warmup-url-prod }}
+        VURL: ${{ inputs.version-url }}
+      run: |
+        set -euo pipefail
+        meta_url=""
+        if [ -n "$VURL" ]; then
+          meta_url="$VURL"
+        elif [ -n "$WARM" ]; then
+          case "$WARM" in
+            */healthz) meta_url="${WARM%/healthz}/_meta" ;;
+          esac
+        fi
+        ok=0
+        if [ -n "$meta_url" ]; then
+          echo "Checking version endpoint: $meta_url"
+          body=$(curl -fsS "$meta_url" || true)
+          if echo "$body" | grep -q "$EXPECT"; then
+            echo "Version check via endpoint passed (found '$EXPECT')."; ok=1
+          else
+            echo "Version endpoint did not contain '$EXPECT' (will check app settings next)."
+          fi
+        fi
+        if [ "$ok" != "1" ]; then
+          echo "Checking BUILD_VERSION app setting..."
+          actual=$(az webapp config appsettings list -g "$RG" -n "$APP" --query "[?name=='BUILD_VERSION'].value | [0]" -o tsv || true)
+          echo "BUILD_VERSION: ${actual:-<none>} (expected: $EXPECT)"
+          if [ "$actual" != "$EXPECT" ]; then
+            echo "Version verification failed." >&2
+            exit 1
+          fi
+        fi

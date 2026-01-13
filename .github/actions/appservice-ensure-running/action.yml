@@ -1,0 +1,46 @@
+name: "App Service Ensure Running"
+description: "Starts an App Service app or slot and waits until state=Running."
+inputs:
+  resource-group:
+    description: Azure Resource Group
+    required: true
+  app-name:
+    description: App Service name
+    required: true
+  slot:
+    description: Optional slot name (e.g., staging). Empty means production.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        APP: ${{ inputs.app-name }}
+        SLOT: ${{ inputs.slot }}
+      run: |
+        set -euo pipefail
+        if [ -n "${SLOT}" ]; then
+          echo "Starting slot ${SLOT} for ${APP}..."
+          az webapp start -g "$RG" -n "$APP" --slot "$SLOT" >/dev/null 2>&1 || true
+          for i in {1..30}; do
+            state=$(az webapp show -g "$RG" -n "$APP" --slot "$SLOT" --query state -o tsv 2>/dev/null || echo "Unknown")
+            echo "State(${SLOT}): $state"
+            if [ "$state" = "Running" ]; then exit 0; fi
+            sleep 2
+          done
+          echo "Slot $SLOT did not report Running within timeout" >&2
+          exit 1
+        else
+          echo "Starting production app ${APP}..."
+          az webapp start -g "$RG" -n "$APP" >/dev/null 2>&1 || true
+          for i in {1..30}; do
+            state=$(az webapp show -g "$RG" -n "$APP" --query state -o tsv 2>/dev/null || echo "Unknown")
+            echo "State(prod): $state"
+            if [ "$state" = "Running" ]; then exit 0; fi
+            sleep 2
+          done
+          echo "App did not report Running within timeout" >&2
+          exit 1
+        fi

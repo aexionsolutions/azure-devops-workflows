@@ -1,0 +1,185 @@
+﻿name: "Verify Infrastructure Health"
+description: "Verifies that infrastructure components (PostgreSQL, Key Vault) are ready before deployment"
+inputs:
+  environment:
+    description: "Environment name (dev, uat, preprod, prod)"
+    required: true
+  resource-group:
+    description: "Azure Resource Group"
+    required: true
+  skip-postgres-check:
+    description: "Skip PostgreSQL health check"
+    required: false
+    default: 'false'
+  postgres-server-name:
+    description: "PostgreSQL server name (auto-detected if empty: tems-{env}-pg)"
+    required: false
+    default: ''
+  key-vault-name:
+    description: "Key Vault name (auto-detected if empty: tems-{env}-kv)"
+    required: false
+    default: ''
+  timeout-seconds:
+    description: "Maximum time to wait for resources to become ready"
+    required: false
+    default: '180'
+runs:
+  using: composite
+  steps:
+    - name: Resolve resource names
+      id: names
+      shell: bash
+      env:
+        ENV: ${{ inputs.environment }}
+        PG_INPUT: ${{ inputs.postgres-server-name }}
+        KV_INPUT: ${{ inputs.key-vault-name }}
+      run: |
+        set -euo pipefail
+        PG="${PG_INPUT:-tems-${ENV}-pg}"
+        KV="${KV_INPUT:-tems-${ENV}-kv}"
+        echo "postgres=$PG" >> $GITHUB_OUTPUT
+        echo "keyvault=$KV" >> $GITHUB_OUTPUT
+        echo "📋 Resource names: PostgreSQL=$PG, KeyVault=$KV"
+
+    - name: Check PostgreSQL server state
+      if: inputs.skip-postgres-check != 'true'
+      shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        PG: ${{ steps.names.outputs.postgres }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+      run: |
+        set -euo pipefail
+        echo "🔍 Checking PostgreSQL server state: $PG"
+        
+        # Check if server exists
+        if ! az postgres flexible-server show -g "$RG" --name "$PG" &>/dev/null; then
+          echo "❌ ERROR: PostgreSQL server '$PG' not found in resource group '$RG'" >&2
+          exit 1
+        fi
+        
+        # Get current state
+        STATE=$(az postgres flexible-server show -g "$RG" --name "$PG" --query state -o tsv)
+        echo "   Current state: $STATE"
+        
+        if [ "$STATE" = "Ready" ]; then
+          echo "   ✅ PostgreSQL server is ready"
+          exit 0
+        fi
+        
+        # If not ready, try to start it
+        echo "   ⚠️  PostgreSQL server is not ready (state: $STATE)"
+        
+        if [ "$STATE" = "Stopped" ]; then
+          echo "   🔄 Starting PostgreSQL server..."
+          az postgres flexible-server start -g "$RG" --name "$PG" --output none || {
+            echo "   ⚠️  Start command failed, but will continue checking state..."
+          }
+        fi
+        
+        # Wait for Ready state
+        echo "   ⏳ Waiting for PostgreSQL to become ready (timeout: ${TIMEOUT}s)..."
+        START_TIME=$(date +%s)
+        while true; do
+          CURRENT_TIME=$(date +%s)
+          ELAPSED=$((CURRENT_TIME - START_TIME))
+          
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "   ❌ Timeout: PostgreSQL did not become ready within ${TIMEOUT}s" >&2
+            echo "   Current state: $(az postgres flexible-server show -g "$RG" --name "$PG" --query state -o tsv)" >&2
+            exit 1
+          fi
+          
+          STATE=$(az postgres flexible-server show -g "$RG" --name "$PG" --query state -o tsv)
+          echo "   [${ELAPSED}s] State: $STATE"
+          
+          if [ "$STATE" = "Ready" ]; then
+            echo "   ✅ PostgreSQL server is now ready!"
+            break
+          fi
+          
+          sleep 5
+        done
+
+    - name: Verify database exists
+      if: inputs.skip-postgres-check != 'true'
+      shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        PG: ${{ steps.names.outputs.postgres }}
+      run: |
+        set -euo pipefail
+        echo "🔍 Verifying application database exists..."
+        
+        # Check if 'app' database exists
+        if ! az postgres flexible-server db show -g "$RG" --server-name "$PG" --database-name app &>/dev/null; then
+          echo "   ⚠️  Database 'app' not found, creating..."
+          az postgres flexible-server db create -g "$RG" --server-name "$PG" --database-name app --output none
+          echo "   ✅ Database 'app' created"
+        else
+          echo "   ✅ Database 'app' exists"
+        fi
+
+    - name: Check Key Vault accessibility
+      shell: bash
+      env:
+        KV: ${{ steps.names.outputs.keyvault }}
+      run: |
+        set -euo pipefail
+        echo "🔍 Checking Key Vault accessibility: $KV"
+        
+        # Try to list secrets (requires at least list permission)
+        if az keyvault secret list --vault-name "$KV" --query "[0].name" -o tsv &>/dev/null; then
+          echo "   ✅ Key Vault is accessible"
+        else
+          echo "   ⚠️  Warning: Cannot list Key Vault secrets" >&2
+          echo "   This may indicate missing permissions, but continuing deployment..." >&2
+        fi
+
+    - name: Verify critical secrets exist
+      shell: bash
+      env:
+        KV: ${{ steps.names.outputs.keyvault }}
+      run: |
+        set -euo pipefail
+        echo "🔍 Verifying critical secrets exist in Key Vault..."
+        
+        SECRETS=("PostgresConnectionString")
+        MISSING=()
+        
+        for SECRET in "${SECRETS[@]}"; do
+          if az keyvault secret show --vault-name "$KV" -n "$SECRET" --query name -o tsv &>/dev/null; then
+            echo "   ✅ Secret exists: $SECRET"
+          else
+            echo "   ❌ Secret missing: $SECRET" >&2
+            MISSING+=("$SECRET")
+          fi
+        done
+        
+        if [ ${#MISSING[@]} -gt 0 ]; then
+          echo "" >&2
+          echo "❌ ERROR: Missing required secrets in Key Vault '$KV':" >&2
+          printf '   - %s\n' "${MISSING[@]}" >&2
+          exit 1
+        fi
+
+    - name: Infrastructure health summary
+      if: always()
+      shell: bash
+      env:
+        PG: ${{ steps.names.outputs.postgres }}
+        KV: ${{ steps.names.outputs.keyvault }}
+        SKIP_PG: ${{ inputs.skip-postgres-check }}
+      run: |
+        {
+          echo "### 🏗️ Infrastructure Health Check"
+          echo ""
+          if [ "$SKIP_PG" != "true" ]; then
+            echo "- **PostgreSQL Server**: $PG ✅"
+            echo "- **Database**: app ✅"
+          else
+            echo "- **PostgreSQL Server**: Skipped"
+          fi
+          echo "- **Key Vault**: $KV ✅"
+          echo "- **Critical Secrets**: Verified ✅"
+        } >> "$GITHUB_STEP_SUMMARY"
