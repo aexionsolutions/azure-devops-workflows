@@ -50,6 +50,11 @@ on:
         type: boolean
         description: 'Enforce coverage thresholds. Set to false for time-travel testing (e.g., promote-release) where coverage was already validated.'
         default: true
+      coverage_assembly_filters:
+        required: false
+        type: string
+        description: 'Assembly filters for code coverage (e.g., -MyApp.Tests;-MyApp.Infrastructure). Test assemblies are automatically excluded.'
+        default: ''
     secrets:
       SONAR_TOKEN:
         required: false
@@ -174,11 +179,21 @@ jobs:
           
           # Coverage report generation (exclude test assemblies from coverage)
           dotnet tool install -g dotnet-reportgenerator-globaltool || true
+          # Determine assembly filters (exclude test assemblies + custom filters)
+          ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
+          if [ -z "$ASSEMBLY_FILTERS" ]; then
+            # Auto-detect test assemblies by looking at test project names
+            TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
+            if [ -n "$TEST_PROJECTS" ]; then
+              ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+            fi
+          fi
+          
           reportgenerator \
             "-reports:**/coverage.opencover.xml" \
             "-targetdir:coverage-report" \
             "-reporttypes:TextSummary" \
-            "-assemblyfilters:-Ems.UnitTests;-Ems.IntegrationTests;-Ems.E2E"
+            "-assemblyfilters:$ASSEMBLY_FILTERS"
           cat coverage-report/Summary.txt || true
 
       - name: Integration Tests + Coverage (OpenCover)
@@ -210,11 +225,22 @@ jobs:
           set -e
           # Re-generate summary to ensure we include all coverage files (unit + integration when enabled)
           dotnet tool install -g dotnet-reportgenerator-globaltool || true
+          
+          # Determine assembly filters (exclude test assemblies + custom filters)
+          ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
+          if [ -z "$ASSEMBLY_FILTERS" ]; then
+            # Auto-detect test assemblies by looking at test project names
+            TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
+            if [ -n "$TEST_PROJECTS" ]; then
+              ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+            fi
+          fi
+          
           reportgenerator \
             "-reports:**/coverage.opencover.xml" \
             "-targetdir:coverage-report" \
             "-reporttypes:TextSummary" \
-            "-assemblyfilters:-Tems.UnitTests;-Tems.IntegrationTests;-Tems.E2E" \
+            "-assemblyfilters:$ASSEMBLY_FILTERS" \
             "-classfilters:-*RegexGenerator*" \
             "-filefilters:-**/obj/**"
 
