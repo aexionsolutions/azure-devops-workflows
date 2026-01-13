@@ -1,4 +1,4 @@
-﻿name: API Build (Artifact Only)
+name: API Build (Artifact Only)
 # NOTE: Environment deployments are centralized in promote-release.yml.
 # This workflow builds and packages api.zip only (build or manual seed to a release tag).
 
@@ -135,7 +135,7 @@ jobs:
 
       - name: Detect SonarCloud settings
         id: sonar
-        uses: ./.github/actions/sonar-detect
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@main
         with:
           requested: true
           token: ${{ secrets.SONAR_TOKEN }}
@@ -166,7 +166,7 @@ jobs:
 
       - name: SonarCloud Begin (build)
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
-        uses: ./.github/actions/sonar-dotnet-begin
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@main
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -193,7 +193,7 @@ jobs:
         # Make non-blocking; only run on default branch builds
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
         continue-on-error: true
-        uses: ./.github/actions/sonar-dotnet-end
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@main
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 

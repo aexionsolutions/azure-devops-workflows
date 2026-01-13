@@ -1,4 +1,4 @@
-﻿name: Azure Infrastructure Deploy
+name: Azure Infrastructure Deploy
 
 on:
   workflow_call:

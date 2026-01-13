@@ -1,4 +1,4 @@
-﻿name: Web Build (Artifact Only)
+name: Web Build (Artifact Only)
 # NOTE: Environment deployments are centralized in promote-release.yml.
 # This workflow builds and packages web.zip only (build or manual seed to a release tag).
 
