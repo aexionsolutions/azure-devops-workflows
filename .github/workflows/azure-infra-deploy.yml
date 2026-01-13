@@ -145,11 +145,11 @@ jobs:
         shell: bash
         run: |
           set -e
-          STATE=$(az provider show -n Microsoft.DBforPostgreSQL --query registrationState -o tsv || echo "Unknown")
+          STATE=$(az provider show -n Microsoft.DBforPostgreSQL --query registrationState -o tsv || echo "[WARN] ")
           echo "Microsoft.DBforPostgreSQL provider state: $STATE"
           if [ "$STATE" != "Registered" ] && [ "$STATE" != "Registering" ]; then
             echo "Attempting to register provider (best effort)..."
-            az provider register -n Microsoft.DBforPostgreSQL --wait || echo "âš ï¸  Skipping provider register due to insufficient permissions."
+            az provider register -n Microsoft.DBforPostgreSQL --wait || echo "[WARN] Skipping provider register due to insufficient permissions."
           else
             echo "Provider already $STATE"
           fi
@@ -158,11 +158,11 @@ jobs:
         shell: bash
         run: |
           set -e
-          STATE=$(az provider show -n microsoft.operationalinsights --query registrationState -o tsv || echo "Unknown")
+          STATE=$(az provider show -n microsoft.operationalinsights --query registrationState -o tsv || echo "[WARN] ")
           echo "microsoft.operationalinsights provider state: $STATE"
           if [ "$STATE" != "Registered" ] && [ "$STATE" != "Registering" ]; then
             echo "Attempting to register provider (best effort)..."
-            az provider register -n microsoft.operationalinsights --wait || echo "âš ï¸  Skipping provider register due to insufficient permissions."
+            az provider register -n microsoft.operationalinsights --wait || echo "[WARN] Skipping provider register due to insufficient permissions."
           else
             echo "Provider already $STATE"
           fi
@@ -198,11 +198,11 @@ jobs:
             echo "âŒ Missing required secrets:$MISSING"
             echo ""
             echo "Please configure secrets in GitHub:"
-            echo "  Repository Settings â†’ Secrets and variables â†’ Actions â†’ Environment: '${{ inputs.environment }}'"
+            echo "  Repository Settings -> Secrets and variables -> Actions -> Environment: '${{ inputs.environment }}'"
             exit 1
           fi
           
-          echo "âœ… All required secrets are configured"
+          echo "[OK] All required secrets are configured"
 
       - name: Resolve PostgreSQL server name
         id: pg
@@ -236,7 +236,7 @@ jobs:
             # Get current state
             STATE=$(az rest --method get \
               --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME?api-version=2024-08-01" \
-              --query properties.state -o tsv || echo "Unknown")
+              --query properties.state -o tsv || echo "[WARN] ")
             echo "Current state: $STATE"
             
             # Determine if we need to start it
@@ -261,7 +261,7 @@ jobs:
           
           az postgres flexible-server start \
             --resource-group "${{ inputs.resource_group }}" \
-            --name "$PG_NAME" || echo "âš ï¸  Start command failed or server already started"
+            --name "$PG_NAME" || echo "[WARN] Start command failed or server already started"
           
           echo "Waiting for server to be Ready..."
           MAX_ATTEMPTS=60
@@ -272,12 +272,12 @@ jobs:
             STATE=$(az postgres flexible-server show \
               --resource-group "${{ inputs.resource_group }}" \
               --name "$PG_NAME" \
-              --query state -o tsv || echo "Unknown")
+              --query state -o tsv || echo "[WARN] ")
             
             echo "Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS: State = $STATE"
             
             if [ "$STATE" = "Ready" ]; then
-              echo "âœ… PostgreSQL server is Ready"
+              echo "[OK] PostgreSQL server is Ready"
               exit 0
             fi
             
@@ -285,7 +285,7 @@ jobs:
             sleep $SLEEP_SECONDS
           done
           
-          echo "âš ï¸  PostgreSQL server did not reach Ready state within timeout"
+          echo "[WARN] PostgreSQL server did not reach Ready state within timeout"
           exit 1
 
       - name: Determine Bicep parameters for PostgreSQL
@@ -397,7 +397,7 @@ jobs:
             --query "properties.outputs.keyVaultName.value" -o tsv || echo "")
           
           if [ -z "$KV_NAME" ]; then
-            echo "âš ï¸  Key Vault name not found in deployment outputs, skipping RBAC setup"
+            echo "[WARN] Key Vault name not found in deployment outputs, skipping RBAC setup"
             exit 0
           fi
           
@@ -413,7 +413,7 @@ jobs:
             --assignee-principal-type ServicePrincipal \
             --role "Key Vault Secrets Officer" \
             --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
-            2>&1 || echo "âš ï¸  Role assignment may already exist or insufficient permissions"
+            2>&1 || echo "[WARN] Role assignment may already exist or insufficient permissions"
           
           # Get API managed identity principal ID (if exists)
           API_MI_NAME="${{ inputs.name_prefix }}-api-mi"
@@ -429,10 +429,10 @@ jobs:
               --assignee-principal-type ServicePrincipal \
               --role "Key Vault Secrets User" \
               --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
-              2>&1 || echo "âš ï¸  Role assignment may already exist or insufficient permissions"
+              2>&1 || echo "[WARN] Role assignment may already exist or insufficient permissions"
           fi
           
-          echo "âœ… Key Vault RBAC setup completed"
+          echo "[OK] Key Vault RBAC setup completed"
       - name: Ensure system-assigned identities on apps (idempotent)
         if: inputs.configure_app_services == true
         shell: bash
@@ -640,4 +640,4 @@ jobs:
           echo "- **Deployment Name**: ${{ inputs.deployment_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **PostgreSQL Server**: ${{ steps.pg.outputs.server_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "âœ… Infrastructure deployment completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "[OK] Infrastructure deployment completed successfully" >> $GITHUB_STEP_SUMMARY
