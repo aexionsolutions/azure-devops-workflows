@@ -187,13 +187,13 @@ jobs:
           MISSING=""
           
           if [ -z "${{ secrets.POSTGRES_ADMIN_PASSWORD }}" ]; then
-            echo "âŒ POSTGRES_ADMIN_PASSWORD secret is not set"
+            echo "[ERROR] POSTGRES_ADMIN_PASSWORD secret is not set"
             MISSING="$MISSING POSTGRES_ADMIN_PASSWORD"
           fi
           
           if [ -n "$MISSING" ]; then
             echo ""
-            echo "âŒ Missing required secrets:$MISSING"
+            echo "[ERROR] Missing required secrets:$MISSING"
             echo ""
             echo "Please configure secrets in GitHub:"
             echo "  Repository Settings -> Secrets and variables -> Actions -> Environment: '${{ inputs.environment }}'"
