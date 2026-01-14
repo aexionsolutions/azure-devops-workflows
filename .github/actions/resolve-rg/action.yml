@@ -1,4 +1,4 @@
-﻿name: "Resolve Resource Group"
+name: "Resolve Resource Group"
 description: "Resolves the Azure Resource Group for the selected environment using per-env overrides or a default."
 inputs:
   environment:

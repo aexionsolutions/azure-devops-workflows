@@ -1,4 +1,4 @@
-﻿name: "Playwright Smoke"
+name: "Playwright Smoke"
 description: "Installs deps, runs Playwright tests against a BASE_URL, uploads report/traces/videos as artifacts."
 inputs:
   working-directory:

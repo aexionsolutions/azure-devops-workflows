@@ -1,4 +1,4 @@
-﻿name: "Verify Infrastructure Health"
+name: "Verify Infrastructure Health"
 description: "Verifies that infrastructure components (PostgreSQL, Key Vault) are ready before deployment"
 inputs:
   environment:
