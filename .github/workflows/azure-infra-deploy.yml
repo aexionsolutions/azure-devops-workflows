@@ -57,8 +57,6 @@ on:
         required: true
         type: string
       
-      
-      
       # Feature Flags
       enable_kv_rbac:
         description: 'Enable automatic Key Vault RBAC assignment for workflow and managed identities'
@@ -382,8 +380,6 @@ jobs:
           echo "PG_FQDN=$(echo "$OUTPUTS" | jq -r '.pgFqdn.value')" >> $GITHUB_OUTPUT
           echo "PG_DB=$(echo "$OUTPUTS" | jq -r '.pgDatabase.value')" >> $GITHUB_OUTPUT
 
-
-
       - name: Setup Key Vault RBAC (if enabled)
         if: inputs.enable_kv_rbac == true
         shell: bash
@@ -548,7 +544,6 @@ jobs:
 
           echo " All connection strings validated"
 
-
       - name: Set App Service settings
         if: inputs.configure_app_services == true
         shell: bash
@@ -626,8 +621,6 @@ jobs:
             --enabled false \
             --output none || true
           echo " Easy Auth disabled"
-
-
 
       - name: Deployment Summary
         shell: bash
