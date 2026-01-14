@@ -74,7 +74,7 @@ permissions:
 jobs:
   deploy-staging:
     name: Deploy to Staging
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/appservice-slot-deploy.yml@v3.0.3
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/appservice-slot-deploy.yml@v3.1.4
     with:
       environment: ${{ inputs.environment }}
       resource-group: ${{ inputs.resource-group }}
@@ -158,7 +158,7 @@ jobs:
       always() &&
       (needs.verify-web.result == 'success') &&
       (inputs.environment != 'prod' || inputs['require-preprod-parity'] != 'true' || needs.parity-gate.result == 'success')
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/appservice-slot-deploy.yml@v3.0.3
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/appservice-slot-deploy.yml@v3.1.4
     with:
       environment: ${{ inputs.environment }}
       resource-group: ${{ inputs.resource-group }}
