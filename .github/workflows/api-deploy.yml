@@ -135,7 +135,7 @@ jobs:
 
       - name: Detect SonarCloud settings
         id: sonar
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@main
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@v3.1.3
         with:
           requested: true
           token: ${{ secrets.SONAR_TOKEN }}
@@ -166,7 +166,7 @@ jobs:
 
       - name: SonarCloud Begin (build)
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@main
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@v3.1.3
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -193,7 +193,7 @@ jobs:
         # Make non-blocking; only run on default branch builds
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
         continue-on-error: true
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@main
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@v3.1.3
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 
