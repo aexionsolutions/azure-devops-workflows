@@ -88,6 +88,10 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.prerelease_tag }}"
           
+          # Configure git identity
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           # Delete existing pre-release tags for this PR
           PR_NUMBER="${{ github.event.pull_request.number }}"
           EXISTING_TAGS=$(git tag -l "v*-pr.${PR_NUMBER}.*")
