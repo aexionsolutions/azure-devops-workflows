@@ -29,6 +29,10 @@ on:
         description: 'Path to API project csproj (e.g., backend/src/Ems.Api/Ems.Api.csproj)'
         required: true
         type: string
+      concurrency_group:
+        description: 'Concurrency group name (e.g., tems-api-build, ravenxpress-api-build)'
+        required: true
+        type: string
         
   push:
     tags:
@@ -66,7 +70,7 @@ permissions:
 
 concurrency:
   # Single build concurrency group; environment deployments moved to promote-release.yml
-  group: tems-api-build
+  group: ${{ inputs.concurrency_group || 'api-build' }}
   cancel-in-progress: true
 
 jobs:

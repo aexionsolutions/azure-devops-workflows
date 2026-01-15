@@ -24,6 +24,10 @@ on:
         description: 'Path to web project directory (e.g., web/tems-portal)'
         required: true
         type: string
+      concurrency_group:
+        description: 'Concurrency group name (e.g., tems-web-build, ravenxpress-web-build)'
+        required: true
+        type: string
         
   push:
     tags:
@@ -52,7 +56,7 @@ on:
 
 concurrency:
   # Single build concurrency group; environment deployments moved to promote-release.yml
-  group: tems-web-build
+  group: ${{ inputs.concurrency_group || 'web-build' }}
   cancel-in-progress: true
 
 permissions:
@@ -128,7 +132,7 @@ jobs:
 
       - name: Install, Lint, Test, Build
         if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed'
-        working-directory: ${{ inputs.web_directory || 'web/tems-portal' }}
+        working-directory: ${{ inputs.web_directory }}
         shell: bash
         run: |
           npm ci || npm i
@@ -156,21 +160,21 @@ jobs:
           New-Item -ItemType Directory -Path _webpkg | Out-Null
           
           # Copy standalone output as the base
-          Copy-Item -Recurse ${{ inputs.web_directory || 'web/tems-portal' }}/.next/standalone/* _webpkg/
+          Copy-Item -Recurse ${{ inputs.web_directory }}/.next/standalone/* _webpkg/
           
           # Rename Next.js's server.js to next-server.js so we can use our custom launcher
           Move-Item _webpkg/server.js _webpkg/next-server.js -Force
           
           # Copy our custom launcher as server.js
-          Copy-Item ${{ inputs.web_directory || 'web/tems-portal' }}/server.js _webpkg/server.js -Force
-          Copy-Item ${{ inputs.web_directory || 'web/tems-portal' }}/web.config _webpkg/web.config -Force
+          Copy-Item ${{ inputs.web_directory }}/server.js _webpkg/server.js -Force
+          Copy-Item ${{ inputs.web_directory }}/web.config _webpkg/web.config -Force
           
           # Copy static assets into .next/static (required for standalone)
           New-Item -ItemType Directory -Path _webpkg/.next/static -Force | Out-Null
-          if (Test-Path ${{ inputs.web_directory || 'web/tems-portal' }}/.next/static) { Copy-Item -Recurse ${{ inputs.web_directory || 'web/tems-portal' }}/.next/static/* _webpkg/.next/static/ }
+          if (Test-Path ${{ inputs.web_directory }}/.next/static) { Copy-Item -Recurse ${{ inputs.web_directory }}/.next/static/* _webpkg/.next/static/ }
           
           # Copy public folder to root
-          if (Test-Path ${{ inputs.web_directory || 'web/tems-portal' }}/public) { Copy-Item -Recurse ${{ inputs.web_directory || 'web/tems-portal' }}/public _webpkg/public }
+          if (Test-Path ${{ inputs.web_directory }}/public) { Copy-Item -Recurse ${{ inputs.web_directory }}/public _webpkg/public }
           
           if (Test-Path $env:PACKAGE) { Remove-Item $env:PACKAGE -Force }
           Compress-Archive -Path _webpkg/* -DestinationPath $env:PACKAGE -CompressionLevel Optimal
@@ -190,14 +194,14 @@ jobs:
         run: |
           if (Test-Path web-tests.zip) { Remove-Item web-tests.zip -Force }
           $items = @(
-            '${{ inputs.web_directory || 'web/tems-portal' }}/tests',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/vitest.config.mts',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/vitest.setup.mts',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/vitest.env.d.ts',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/package.json',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/package-lock.json',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/pnpm-lock.yaml',
-            '${{ inputs.web_directory || 'web/tems-portal' }}/tsconfig.json'
+            '${{ inputs.web_directory }}/tests',
+            '${{ inputs.web_directory }}/vitest.config.mts',
+            '${{ inputs.web_directory }}/vitest.setup.mts',
+            '${{ inputs.web_directory }}/vitest.env.d.ts',
+            '${{ inputs.web_directory }}/package.json',
+            '${{ inputs.web_directory }}/package-lock.json',
+            '${{ inputs.web_directory }}/pnpm-lock.yaml',
+            '${{ inputs.web_directory }}/tsconfig.json'
           )
           $existing = $items | Where-Object { Test-Path $_ }
           if ($existing.Count -eq 0) { New-Item -ItemType File -Path __empty_tests_marker.txt | Out-Null; $existing = @('__empty_tests_marker.txt') }
