@@ -34,8 +34,17 @@ inputs:
     default: ""
   js_lcov:
     description: Path to JS/TS lcov report (for web coverage)
+    required: true
+  sonar_exclusions:
+    description: SonarCloud file exclusions (comma-separated patterns)
+    required: true
+  sonar_coverage_exclusions:
+    description: SonarCloud coverage exclusions (comma-separated patterns)
+    required: true
+  sonar_infra_exclusions:
+    description: Infrastructure-specific exclusions (optional)
     required: false
-    default: "web/tems-portal/coverage/lcov.info"
+    default: ""
 
 runs:
   using: composite
@@ -56,11 +65,21 @@ runs:
         PR_BRANCH: ${{ inputs.pr_branch }}
         PR_BASE: ${{ inputs.pr_base }}
         JS_LCOV: ${{ inputs.js_lcov }}
+        SONAR_EXCLUSIONS: ${{ inputs.sonar_exclusions }}
+        SONAR_COVERAGE_EXCLUSIONS: ${{ inputs.sonar_coverage_exclusions }}
+        SONAR_INFRA_EXCLUSIONS: ${{ inputs.sonar_infra_exclusions }}
       run: |
         set -e
         export PATH="$PATH:$HOME/.dotnet/tools"
         # Force project base dir to the repository root for consistent behavior across Scanner v8+ changes
         PBDIR="${GITHUB_WORKSPACE:-$(pwd)}"
+        
+        # Build exclusions dynamically
+        FULL_EXCLUSIONS="${SONAR_EXCLUSIONS}"
+        if [ -n "$SONAR_INFRA_EXCLUSIONS" ]; then
+          FULL_EXCLUSIONS="${FULL_EXCLUSIONS},${SONAR_INFRA_EXCLUSIONS}"
+        fi
+        
         ARGS=(
           "/o:${SONAR_ORG}"
           "/k:${SONAR_PROJECT_KEY}"
@@ -70,8 +89,8 @@ runs:
           "/d:sonar.projectBaseDir=${PBDIR}"
           "/d:sonar.scanner.scanAll=true"
           "/d:sonar.sources=."
-          "/d:sonar.exclusions=**/bin/**,**/obj/**,**/node_modules/**,**/.next/**,**/coverage/**,**/dist/**,**/out/**,**/.github/workflows/**,**/Program.cs,docs/tools/**,setup-oidc.ps1,infra/tems-infra/azure/modules/**/*.bicep"
-          "/d:sonar.coverage.exclusions=**/*.g.cs,**/*.generated.cs,**/*Designer.cs,**/Migrations/**,**/bin/**,**/obj/**,**/Program.cs,web/tems-portal/next-env.d.ts,**/*.d.ts,**/*.css,web/tems-portal/eslint.config.mjs,web/tems-portal/postcss.config.mjs,web/tems-portal/vitest.config.ts,web/tems-portal/vitest.setup.ts,web/tems-portal/tsconfig.json,web/tems-portal/next.config.ts,web/tems-portal/next.config.mjs,web/tems-portal/playwright.config.ts,web/tems-portal/playwright.config.js,web/tems-portal/playwright.prod.config.ts,web/tems-portal/server.js,web/tems-portal/tests/**"
+          "/d:sonar.exclusions=${FULL_EXCLUSIONS}"
+          "/d:sonar.coverage.exclusions=${SONAR_COVERAGE_EXCLUSIONS}"
           "/d:sonar.cpd.exclusions=**/Migrations/**/*.cs,**/*.Designer.cs,**/*.generated.cs,**/*ModelSnapshot.cs"
           "/d:sonar.test.inclusions=**/*.Tests/**,**/*Tests.cs,**/*.spec.ts,**/*.test.ts,**/*.spec.tsx,**/*.test.tsx"
           "/d:sonar.cs.vstest.reportsPaths=**/TestResults/**/*.trx"

@@ -13,87 +13,223 @@ This repository provides battle-tested, reusable CI/CD workflows for Azure deplo
 - [TEMS](https://github.com/aexionsolutions/tems)
 - [RavenXpress](https://github.com/aexionsolutions/ravenxpress)
 
+---
+
+## ⚠️ Important: Required Inputs (No Defaults)
+
+**All repo-specific paths MUST be explicitly provided** - there are NO fallback defaults to prevent silent failures.
+
+### Why No Defaults?
+- **Fail-safe**: Missing configuration fails immediately with clear errors
+- **Self-documenting**: Calling workflows explicitly show their structure
+- **Multi-repo safe**: Works with any project structure (TEMS, RavenXpress, etc.)
+- **No hidden behavior**: No assumptions about your repository layout
+
+### What You Must Provide:
+- ✅ `js_lcov_path` - Path to lcov.info (e.g., `web/tems-portal/coverage/lcov.info`)
+- ✅ `sonar_exclusions` - Files to exclude from SonarCloud analysis
+- ✅ `sonar_coverage_exclusions` - Files to exclude from coverage
+- ✅ `concurrency_group` - Unique build concurrency group name
+- ✅ `web_directory` / `api_project` - Project paths
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
 
-- Azure subscription with OIDC configured ([Setup Guide](docs/azure-oidc-setup.md))
+- Azure subscription with OIDC configured
 - GitHub repository secrets configured
 - Bicep templates for infrastructure (if using infra workflows)
 
 ### 2. Use in Your Workflow
 
-Create a caller workflow in your repository (e.g., `.github/workflows/deploy-infra.yml`):
+#### Example: .NET CI with SonarCloud
 
 ```yaml
-name: Deploy Infrastructure
+name: PR CI
 
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        required: true
-        type: choice
-        options: [dev, uat, preprod, prod]
+  pull_request:
+    branches: [main, dev]
 
 jobs:
-  deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+  ci:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v3.2.0
     with:
-      environment: ${{ inputs.environment }}
-      azure_location: ukwest
-      resource_group: myapp-${{ inputs.environment }}-rg
-      name_prefix: myapp-${{ inputs.environment }}
-      bicep_template_path: infra/main.bicep
+      solution: Ems.sln
+      web_working_directory: web/tems-portal
+      run_web_unit_tests: true
+      
+      # Required: Explicit lcov path (no defaults!)
+      js_lcov_path: web/tems-portal/coverage/lcov.info
+      
+      # Required: SonarCloud exclusions (customize for your repo)
+      sonar_exclusions: '**/bin/**,**/obj/**,**/node_modules/**,**/.next/**,**/coverage/**,**/.github/workflows/**,**/Program.cs'
+      sonar_coverage_exclusions: '**/*.g.cs,**/*.generated.cs,**/Migrations/**,web/tems-portal/next-env.d.ts,**/*.d.ts,**/*.css,web/tems-portal/*.config.{ts,js,mjs},web/tems-portal/vitest.{config,setup}.ts,web/tems-portal/tests/**'
+      sonar_infra_exclusions: 'infra/tems-infra/azure/modules/**/*.bicep,docs/tools/**'
+      
+      pr_number: ${{ github.event.pull_request.number }}
+      pr_head: ${{ github.head_ref }}
+      pr_base: ${{ github.base_ref }}
     secrets:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_ORG: ${{ secrets.SONAR_ORG }}
+      SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
 ```
+
+#### Example: Web Deployment
+
+```yaml
+name: Build Web
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-deploy.yml@v3.2.0
+    with:
+      web_directory: web/tems-portal           # Required: No defaults
+      concurrency_group: tems-web-build        # Required: Unique per repo
+```
+
+#### Example: API Deployment
+
+```yaml
+name: Build API
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/api-deploy.yml@v3.2.0
+    with:
+      api_project: backend/src/Ems.Api/Ems.Api.csproj
+      unit_test_project: tests/Ems.UnitTests/Ems.UnitTests.csproj
+      concurrency_group: tems-api-build        # Required: Unique per repo
+```
+
+---
 
 ## 📚 Available Workflows
 
-| Workflow | Purpose | Documentation | Status |
-|----------|---------|---------------|--------|
-| [azure-infra-deploy.yml](.github/workflows/azure-infra-deploy.yml) | Deploy Bicep infrastructure to Azure | [📖 Docs](docs/workflows/azure-infra-deploy.md) | ✅ Ready |
-| [dotnet-ci.yml](.github/workflows/dotnet-ci.yml) | .NET build, test, coverage, SonarCloud | [📖 Docs](docs/workflows/dotnet-ci.md) | ✅ Ready |
-| [web-ci.yml](.github/workflows/web-ci.yml) | React/Next.js lint, test, build | [📖 Docs](docs/workflows/web-ci.md) | ✅ Ready |
-| azure-api-deploy.yml | Deploy .NET API to App Service | 📖 Docs | 🚧 Planned |
-| azure-web-deploy.yml | Deploy static web app | 📖 Docs | 🚧 Planned |
+| Workflow | Purpose | Required Inputs | Status |
+|----------|---------|----------------|--------|
+| [dotnet-ci.yml](.github/workflows/dotnet-ci.yml) | .NET build, test, coverage, SonarCloud | `js_lcov_path`, `sonar_exclusions`, `sonar_coverage_exclusions` | ✅ Ready |
+| [web-deploy.yml](.github/workflows/web-deploy.yml) | Next.js build & package | `web_directory`, `concurrency_group` | ✅ Ready |
+| [api-deploy.yml](.github/workflows/api-deploy.yml) | .NET API build & package | `api_project`, `concurrency_group` | ✅ Ready |
+| [azure-infra-deploy.yml](.github/workflows/azure-infra-deploy.yml) | Deploy Bicep infrastructure | `environment`, `resource_group`, `name_prefix` | ✅ Ready |
+| [web-ci.yml](.github/workflows/web-ci.yml) | React/Next.js lint, test | - | ✅ Ready |
 
-## 📖 Documentation
+---
 
-- **[Usage Guide](docs/usage-guide.md)** - How to consume these workflows
-- **[Parameters Reference](docs/parameters-reference.md)** - Complete input/secret documentation
-- **[Migration Guide](docs/migration-guide.md)** - Migrate from inline workflows
-- **[Examples](docs/examples/)** - Real-world usage examples
-- **[Azure OIDC Setup](docs/azure-oidc-setup.md)** - Configure Azure authentication
+## 🔧 Configuration Guide
 
-## 🔐 Required Setup
+### SonarCloud Configuration
 
-### Azure Configuration
+All SonarCloud paths are **required** and must match your repo structure:
 
-1. **Service Principal**: Create with Contributor + User Access Administrator roles
-2. **Federated Credentials**: One per environment (dev, uat, preprod, prod)
-3. **Resource Providers**: Ensure `Microsoft.DBforPostgreSQL` and `microsoft.operationalinsights` registered
+#### Base Exclusions (Common for all repos)
+```yaml
+sonar_exclusions: '**/bin/**,**/obj/**,**/node_modules/**,**/.next/**,**/coverage/**,**/dist/**,**/out/**,**/.github/workflows/**,**/Program.cs'
+```
 
-See [Azure OIDC Setup Guide](docs/azure-oidc-setup.md) for detailed instructions.
+#### Coverage Exclusions (Customize paths!)
+```yaml
+# TEMS Example:
+sonar_coverage_exclusions: '**/*.g.cs,**/*.generated.cs,**/Migrations/**,web/tems-portal/next-env.d.ts,**/*.d.ts,**/*.css,web/tems-portal/*.config.{ts,js,mjs},web/tems-portal/vitest.{config,setup}.ts,web/tems-portal/tests/**'
 
-### GitHub Secrets
+# RavenXpress Example:
+sonar_coverage_exclusions: '**/*.g.cs,**/*.generated.cs,**/Migrations/**,rx-web/next-env.d.ts,**/*.d.ts,**/*.css,rx-web/*.config.{ts,js,mjs},rx-web/vitest.{config,setup}.ts,rx-web/tests/**'
+```
 
-**Repository Secrets** (one-time setup):
+#### Infrastructure Exclusions (Optional, repo-specific)
+```yaml
+# TEMS:
+sonar_infra_exclusions: 'infra/tems-infra/azure/modules/**/*.bicep,docs/tools/**'
+
+# RavenXpress:
+sonar_infra_exclusions: 'infra/ravenxpress-infra/**/*.bicep'
+
+# None:
+sonar_infra_exclusions: ''
+```
+
+### Concurrency Groups
+
+Prevent concurrent builds by specifying unique concurrency groups:
+
+```yaml
+# TEMS:
+concurrency_group: tems-web-build
+concurrency_group: tems-api-build
+
+# RavenXpress:
+concurrency_group: ravenxpress-web-build
+concurrency_group: ravenxpress-api-build
+```
+
+---
+
+## 📖 Complete Input Reference
+
+### dotnet-ci.yml
+
+| Input | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `solution` | ✅ | Path to .sln file | `Ems.sln` |
+| `web_working_directory` | ❌ | Web tests directory | `web/tems-portal` |
+| `run_web_unit_tests` | ❌ | Enable web tests | `true` |
+| `js_lcov_path` | ✅ | Path to lcov.info | `web/tems-portal/coverage/lcov.info` |
+| `sonar_exclusions` | ✅ | File exclusions | See examples above |
+| `sonar_coverage_exclusions` | ✅ | Coverage exclusions | See examples above |
+| `sonar_infra_exclusions` | ❌ | Infra exclusions | `infra/**/*.bicep` |
+| `pr_number` | ❌ | PR number | `${{ github.event.pull_request.number }}` |
+| `pr_head` | ❌ | PR head branch | `${{ github.head_ref }}` |
+| `pr_base` | ❌ | PR base branch | `${{ github.base_ref }}` |
+
+### web-deploy.yml
+
+| Input | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `web_directory` | ✅ | Web project path | `web/tems-portal` |
+| `concurrency_group` | ✅ | Build group name | `tems-web-build` |
+| `release_tag` | ❌ | Release tag | `v1.2.3` |
+| `allow_override` | ❌ | Replace existing asset | `false` |
+
+### api-deploy.yml
+
+| Input | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `api_project` | ✅ | API csproj path | `backend/src/Ems.Api/Ems.Api.csproj` |
+| `unit_test_project` | ✅ | Test project path | `tests/Ems.UnitTests/Ems.UnitTests.csproj` |
+| `concurrency_group` | ✅ | Build group name | `tems-api-build` |
+| `release_tag` | ❌ | Release tag | `v1.2.3` |
+
+---
+
+## 🔐 Required Secrets
+
+### Repository Secrets (one-time)
 ```
 AZURE_CLIENT_ID          # Service principal application ID
 AZURE_TENANT_ID          # Azure AD tenant ID  
 AZURE_SUBSCRIPTION_ID    # Azure subscription ID
+SONAR_TOKEN             # SonarCloud token
+SONAR_ORG               # SonarCloud organization key
+SONAR_PROJECT_KEY       # SonarCloud project key
 ```
 
-**Environment Secrets** (per environment: dev, uat, preprod, prod):
+### Environment Secrets (per environment)
 ```
 POSTGRES_ADMIN_PASSWORD  # PostgreSQL admin password
-AZURE_LOCATION          # Azure region (e.g., ukwest)
 ```
+
+---
 
 ## 🔄 Versioning
 

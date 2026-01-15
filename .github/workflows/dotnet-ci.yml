@@ -45,6 +45,23 @@ on:
         type: boolean
         description: 'Run web unit tests with vitest (skip if repo does not have vitest yet)'
         default: false
+      js_lcov_path:
+        required: true
+        type: string
+        description: 'Path to JS/TS lcov.info file for SonarCloud (e.g., web/tems-portal/coverage/lcov.info, rx-web/coverage/lcov.info)'
+      sonar_exclusions:
+        required: true
+        type: string
+        description: 'SonarCloud file exclusions (comma-separated patterns, e.g., **/bin/**,**/obj/**,**/node_modules/**,**/.next/**,**/coverage/**,**/.github/workflows/**,**/Program.cs)'
+      sonar_coverage_exclusions:
+        required: true
+        type: string
+        description: 'SonarCloud coverage exclusions (comma-separated patterns for config files like *.config.ts,*.config.js,**/tests/**,**/*.d.ts,**/*.css)'
+      sonar_infra_exclusions:
+        required: false
+        type: string
+        description: 'Infrastructure-specific exclusions (e.g., infra/tems-infra/azure/modules/**/*.bicep, docs/tools/**)'
+        default: ''
       enforce_coverage:
         required: false
         type: boolean
@@ -158,7 +175,10 @@ jobs:
           pr_key: ${{ inputs.pr_number }}
           pr_branch: ${{ inputs.pr_head }}
           pr_base: ${{ inputs.pr_base }}
-          js_lcov: tems-web/coverage/lcov.info
+          js_lcov: ${{ inputs.js_lcov_path }}
+          sonar_exclusions: ${{ inputs.sonar_exclusions }}
+          sonar_coverage_exclusions: ${{ inputs.sonar_coverage_exclusions }}
+          sonar_infra_exclusions: ${{ inputs.sonar_infra_exclusions }}
 
       # Sonar begin is handled by the composite above (conditionally)
 
