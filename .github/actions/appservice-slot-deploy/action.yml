@@ -46,7 +46,7 @@ runs:
 
     - name: Ensure staging slot is started
       if: inputs.use-slot == 'true'
-      uses: aexionsolutions/azure-devops-workflows/.github/actions/appservice-ensure-running@v3.1.5
+      uses: ../../appservice-ensure-running
       with:
         resource-group: ${{ inputs.resource-group }}
         app-name: ${{ inputs.app-name }}
@@ -69,7 +69,7 @@ runs:
 
     - name: Ensure production app is started (no slots)
       if: inputs.use-slot != 'true'
-      uses: aexionsolutions/azure-devops-workflows/.github/actions/appservice-ensure-running@v3.1.5
+      uses: ../../appservice-ensure-running
       with:
         resource-group: ${{ inputs.resource-group }}
         app-name: ${{ inputs.app-name }}
