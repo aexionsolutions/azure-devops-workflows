@@ -148,8 +148,16 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Extract workflow ref
+        id: workflow_ref
+        shell: bash
+        run: |
+          WORKFLOW_REF="${{ github.workflow_ref }}"
+          REF="${WORKFLOW_REF##*@}"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+
       - name: Azure login (smart)
-        uses: ./.github/actions/azure-login-smart
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/azure-login-smart@${{ steps.workflow_ref.outputs.ref }}
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -174,7 +182,7 @@ jobs:
       - name: Resolve Resource Group (verify)
         id: rgres
         if: inputs['resource-group'] == ''
-        uses: ./.github/actions/resolve-rg
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/resolve-rg@${{ steps.workflow_ref.outputs.ref }}
         with:
           environment: ${{ inputs.environment }}
           default: ${{ secrets.AZURE_RESOURCE_GROUP }}

@@ -120,6 +120,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
 
+      - name: Extract workflow ref
+        id: workflow_ref
+        shell: bash
+        run: |
+          # github.workflow_ref format: owner/repo/.github/workflows/workflow.yml@refs/tags/v4.0.1
+          # Extract the @ref part
+          WORKFLOW_REF="${{ github.workflow_ref }}"
+          REF="${WORKFLOW_REF##*@}"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          echo "Workflow ref: $REF"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -132,7 +143,7 @@ jobs:
 
       - name: Detect SonarCloud
         id: sonar
-        uses: ./.github/actions/sonar-detect
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@${{ steps.workflow_ref.outputs.ref }}
         with:
           requested: ${{ inputs.sonar_enabled }}
           token: ${{ secrets.SONAR_TOKEN }}
@@ -166,7 +177,7 @@ jobs:
 
       - name: Install SonarScanner for .NET
         if: steps.sonar.outputs.enabled == 'true'
-        uses: ./.github/actions/sonar-dotnet-begin
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@${{ steps.workflow_ref.outputs.ref }}
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -333,7 +344,7 @@ jobs:
 
       - name: SonarCloud End
         if: steps.sonar.outputs.enabled == 'true'
-        uses: ./.github/actions/sonar-dotnet-end
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@${{ steps.workflow_ref.outputs.ref }}
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 

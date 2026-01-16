@@ -116,6 +116,14 @@ jobs:
           ref: ${{ inputs.git_ref || '' }}
           persist-credentials: false
 
+      - name: Extract workflow ref
+        id: workflow_ref
+        shell: bash
+        run: |
+          WORKFLOW_REF="${{ github.workflow_ref }}"
+          REF="${WORKFLOW_REF##*@}"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: '10.0.x' }
 
@@ -139,7 +147,7 @@ jobs:
 
       - name: Detect SonarCloud settings
         id: sonar
-        uses: ./.github/actions/sonar-detect
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@${{ steps.workflow_ref.outputs.ref }}
         with:
           requested: true
           token: ${{ secrets.SONAR_TOKEN }}
@@ -170,7 +178,7 @@ jobs:
 
       - name: SonarCloud Begin (build)
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
-        uses: ./.github/actions/sonar-dotnet-begin
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@${{ steps.workflow_ref.outputs.ref }}
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -197,7 +205,7 @@ jobs:
         # Make non-blocking; only run on default branch builds
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
         continue-on-error: true
-        uses: ./.github/actions/sonar-dotnet-end
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@${{ steps.workflow_ref.outputs.ref }}
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 
