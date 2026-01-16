@@ -96,7 +96,7 @@ permissions:
 jobs:
   deploy-staging:
     name: Deploy to Staging
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/appservice-slot-deploy.yml@v3.1.5
+    uses: ./.github/workflows/appservice-slot-deploy.yml
     with:
       environment: ${{ inputs.environment }}
       resource-group: ${{ inputs.resource-group }}
@@ -149,7 +149,7 @@ jobs:
           persist-credentials: false
 
       - name: Azure login (smart)
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/azure-login-smart@v3.1.5
+        uses: ./.github/actions/azure-login-smart
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -174,7 +174,7 @@ jobs:
       - name: Resolve Resource Group (verify)
         id: rgres
         if: inputs['resource-group'] == ''
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/resolve-rg@v3.1.5
+        uses: ./.github/actions/resolve-rg
         with:
           environment: ${{ inputs.environment }}
           default: ${{ secrets.AZURE_RESOURCE_GROUP }}
@@ -370,7 +370,7 @@ jobs:
       always() &&
       (needs.verify-api.result == 'success') &&
       (inputs.environment != 'prod' || inputs['require-preprod-parity'] != 'true' || needs.parity-gate.result == 'success')
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/appservice-slot-deploy.yml@v3.1.5
+    uses: ./.github/workflows/appservice-slot-deploy.yml
     with:
       environment: ${{ inputs.environment }}
       resource-group: ${{ inputs.resource-group }}

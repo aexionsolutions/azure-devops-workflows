@@ -132,7 +132,7 @@ jobs:
 
       - name: Detect SonarCloud
         id: sonar
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@v3.1.5
+        uses: ./.github/actions/sonar-detect
         with:
           requested: ${{ inputs.sonar_enabled }}
           token: ${{ secrets.SONAR_TOKEN }}
@@ -166,7 +166,7 @@ jobs:
 
       - name: Install SonarScanner for .NET
         if: steps.sonar.outputs.enabled == 'true'
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@v3.1.5
+        uses: ./.github/actions/sonar-dotnet-begin
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -333,7 +333,7 @@ jobs:
 
       - name: SonarCloud End
         if: steps.sonar.outputs.enabled == 'true'
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@v3.1.5
+        uses: ./.github/actions/sonar-dotnet-end
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 
