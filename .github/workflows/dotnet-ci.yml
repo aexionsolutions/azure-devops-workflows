@@ -72,6 +72,11 @@ on:
         type: string
         description: 'Assembly filters for code coverage (e.g., -MyApp.Tests;-MyApp.Infrastructure). Test assemblies are automatically excluded.'
         default: ''
+      workflow_version:
+        required: false
+        type: string
+        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions). Defaults to github.action_ref if available.'
+        default: ''
     secrets:
       SONAR_TOKEN:
         required: false
@@ -120,16 +125,23 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
 
-      - name: Extract workflow ref
+      - name: Resolve workflow version
         id: workflow_ref
         shell: bash
         run: |
-          # github.workflow_ref format: owner/repo/.github/workflows/workflow.yml@refs/tags/v4.0.1
-          # Extract the @ref part
-          WORKFLOW_REF="${{ github.workflow_ref }}"
-          REF="${WORKFLOW_REF##*@}"
+          # Use explicit input if provided, otherwise try to extract from github.workflow_ref or github.action_ref
+          if [ -n "${{ inputs.workflow_version }}" ]; then
+            REF="${{ inputs.workflow_version }}"
+          elif [ -n "${{ github.workflow_ref }}" ]; then
+            WORKFLOW_REF="${{ github.workflow_ref }}"
+            REF="${WORKFLOW_REF##*@}"
+          elif [ -n "${{ github.action_ref }}" ]; then
+            REF="${{ github.action_ref }}"
+          else
+            REF="main"
+          fi
           echo "ref=$REF" >> $GITHUB_OUTPUT
-          echo "Workflow ref: $REF"
+          echo "Using workflow version: $REF"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

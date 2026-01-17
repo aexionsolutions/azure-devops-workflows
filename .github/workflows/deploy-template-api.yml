@@ -73,6 +73,11 @@ on:
         required: false
         type: string
         default: ''
+      workflow_version:
+        required: false
+        type: string
+        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions)'
+        default: ''
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -152,8 +157,14 @@ jobs:
         id: workflow_ref
         shell: bash
         run: |
-          WORKFLOW_REF="${{ github.workflow_ref }}"
-          REF="${WORKFLOW_REF##*@}"
+          if [ -n "${{ inputs.workflow_version }}" ]; then
+            REF="${{ inputs.workflow_version }}"
+          elif [ -n "${{ github.workflow_ref }}" ]; then
+            WORKFLOW_REF="${{ github.workflow_ref }}"
+            REF="${WORKFLOW_REF##*@}"
+          else
+            REF="main"
+          fi
           echo "ref=$REF" >> $GITHUB_OUTPUT
 
       - name: Azure login (smart)

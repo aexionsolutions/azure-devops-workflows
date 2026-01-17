@@ -1,21 +1,28 @@
-# TEMS Migration Guide - v3.2.0 Breaking Changes
+# TEMS Migration Guide - v4.0.1
 
 ## 🚨 Breaking Changes Summary
 
-The shared workflows now **require explicit inputs** for all repo-specific paths - **defaults have been removed**.
+Version v4.0.0 introduced **required explicit inputs** for all repo-specific paths - **defaults were removed**.
+Version v4.0.1 fixes internal action versioning to ensure workflows and actions versions stay synchronized.
 
-### What Changed:
+### What Changed in v4.0.0:
 1. ✅ **`js_lcov_path`** - Now REQUIRED (was optional with auto-construction)
 2. ✅ **`sonar_exclusions`** - Now REQUIRED (was hardcoded)
 3. ✅ **`sonar_coverage_exclusions`** - Now REQUIRED (was hardcoded)
 4. ✅ **`concurrency_group`** - Now REQUIRED in web-deploy.yml and api-deploy.yml
 5. ✅ **All hardcoded TEMS paths removed** - Generic for any repo
 
+### What Changed in v4.0.1:
+- 🔧 **Fixed action versioning**: Workflows now use matching action versions (no more v4.0.0 workflow calling v3.1.5 actions)
+- 🔧 **Added `workflow_version` parameter**: Optional explicit version control for testing/debugging
+- 🔧 **Cross-repo compatibility**: Actions now correctly resolve when called from consuming repositories
+
 ### Why:
 - **Fail-safe**: Missing config = immediate error (not silent failure)
 - **Multi-repo compatible**: Works with TEMS, RavenXpress, any project
 - **Self-documenting**: Caller workflows show exact structure
 - **No hidden behavior**: Explicit is better than implicit
+- **Version consistency**: Workflow version matches action versions
 
 ---
 
@@ -47,7 +54,7 @@ jobs:
 ```yaml
 jobs:
   ci:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v3.2.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.0.1
     with:
       solution: Ems.sln
       web_working_directory: web/tems-portal
