@@ -98,16 +98,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Delete existing pre-release tags for this PR
           PR_NUMBER="${{ github.event.pull_request.number }}"
-          EXISTING_TAGS=$(git tag -l "v*-pr.${PR_NUMBER}.*")
-          for OLD_TAG in $EXISTING_TAGS; do
-            echo "🗑️  Deleting old tag: $OLD_TAG"
-            git tag -d "$OLD_TAG" || true
-            git push origin ":refs/tags/$OLD_TAG" || true
-          done
-          
-          # Create new pre-release tag
+
+          # Never delete old prerelease tags (consumers may have pinned them).
+          # Create a new, commit-addressed tag for traceability.
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "ℹ️  Tag $TAG already exists - skipping creation"
+            exit 0
+          fi
+
           echo "✨ Creating pre-release tag: $TAG"
           git tag -a "$TAG" -m "Pre-release for PR #$PR_NUMBER"
           git push origin "$TAG"
@@ -281,7 +280,8 @@ jobs:
   cleanup-prereleases:
     name: Cleanup Old Pre-release Tags
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    # Disabled: deleting prerelease tags can break downstream repos pinned to older prerelease versions.
+    if: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

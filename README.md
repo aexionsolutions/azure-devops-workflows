@@ -243,7 +243,15 @@ This repository uses **fully automated versioning** based on [Conventional Commi
 
 ### 🔒 Version Immutability
 
-When you reference a workflow at a specific tag (e.g., `@v4.1.0`), **the entire workflow tree is immutable**. All internal composite actions use relative paths (`uses: ./.github/actions/sonar-detect`), so they automatically resolve within that exact git snapshot. No separate pinning needed.
+When you reference a workflow at a specific tag (e.g., `@v4.1.0`), **the workflow definition is immutable**.
+
+Because reusable workflows execute in the *calling repo's* workspace, internal composite actions from this repo are resolved via a **dual-checkout** pattern:
+
+- The calling repo is checked out into `caller/` (this is where build/test commands run)
+- This repo is checked out into `shared/` at the exact same `@ref` the reusable workflow was invoked with (derived from `GITHUB_WORKFLOW_REF`)
+- Composite actions are invoked from `./shared/.github/actions/...`
+
+This keeps the reusable workflow + its internal actions locked to the same tag/branch without needing any workflow-file rewriting.
 
 ### Version Bump Rules
 

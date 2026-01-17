@@ -139,17 +139,43 @@ jobs:
     needs: deploy-staging
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    env:
+      CALLER_WORKDIR: caller
+
+    defaults:
+      run:
+        working-directory: caller
     outputs:
       base_url: ${{ steps.base.outputs.url }}
     steps:
-      - name: Checkout repository (no token persisted)
+      - name: Resolve called workflow ref
+        id: wfref
+        shell: bash
+        run: |
+          set -e
+          REF="${GITHUB_WORKFLOW_REF##*@}"
+          if [ -z "$REF" ]; then REF="${GITHUB_SHA}"; fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved workflow ref: $REF"
+
+      - name: Checkout caller repo (no token persisted)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           persist-credentials: false
+          path: caller
+
+      - name: Checkout shared workflows repo (no token persisted)
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: shared
 
       - name: Azure login (smart)
-        uses: ./.github/actions/azure-login-smart
+        uses: ./shared/.github/actions/azure-login-smart
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -174,7 +200,7 @@ jobs:
       - name: Resolve Resource Group (verify)
         id: rgres
         if: inputs['resource-group'] == ''
-        uses: ./.github/actions/resolve-rg
+        uses: ./shared/.github/actions/resolve-rg
         with:
           environment: ${{ inputs.environment }}
           default: ${{ secrets.AZURE_RESOURCE_GROUP }}

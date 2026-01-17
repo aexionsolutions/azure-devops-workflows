@@ -271,7 +271,14 @@ uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deplo
 
 **💡 How version immutability works:**
 
-When you reference `@v1.2.0`, GitHub checks out that exact git snapshot. All internal composite actions use relative paths (`uses: ./.github/actions/action-name`), which automatically resolve within that snapshot. This ensures the entire workflow tree is locked to the same version without any additional pinning logic.
+When you reference `@v1.2.0`, GitHub pins the reusable workflow to that exact snapshot.
+
+Reusable workflows run inside the *calling repo* workspace, so this repo’s internal composite actions are resolved by checking out two folders:
+
+- `caller/`: the calling repo (where `run:` steps execute)
+- `shared/`: this repo at the same `@ref` the workflow was invoked with (derived from `GITHUB_WORKFLOW_REF`)
+
+Composite actions are then referenced from `./shared/.github/actions/...`, keeping the workflow + its internals locked to the same version.
 
 ### 2. Secrets Management
 
