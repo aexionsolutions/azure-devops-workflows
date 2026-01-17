@@ -115,6 +115,7 @@ jobs:
       - name: Resolve called workflow ref
         id: wfref
         shell: bash
+        working-directory: .
         run: |
           set -e
           REF="${GITHUB_WORKFLOW_REF##*@}"
