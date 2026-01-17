@@ -3,6 +3,11 @@ name: Reusable App Service Slot Deploy
 on:
   workflow_call:
     inputs:
+      shared_ref:
+        description: 'Ref (tag/sha/branch) of aexionsolutions/azure-devops-workflows to checkout into ./shared. Set this to the same @ref used in the calling repo. If omitted, defaults to main.'
+        required: false
+        type: string
+        default: ''
       environment:
         description: Environment name (dev/uat/preprod/prod)
         required: true
@@ -91,13 +96,43 @@ jobs:
     name: ${{ (inputs['display-name'] != '' && inputs['display-name']) || 'Deploy' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    env:
+      CALLER_WORKDIR: caller
     outputs:
       use_slot: ${{ steps.resolve.outputs.use_slot }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        run: |
+          set -euo pipefail
+          INPUT_REF="${{ inputs.shared_ref }}"
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            REF="main"
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
+
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: caller
+
+      - name: Checkout shared workflows repo
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 1
+          path: shared
 
       - name: Azure login (smart)
-        uses: ./.github/actions/azure-login-smart
+        uses: ./shared/.github/actions/azure-login-smart
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -123,7 +158,7 @@ jobs:
       - name: Resolve Resource Group (fallback if not provided)
         id: rgres
         if: inputs['resource-group'] == ''
-        uses: ./.github/actions/resolve-rg
+        uses: ./shared/.github/actions/resolve-rg
         with:
           environment: ${{ inputs['environment'] }}
           default: ${{ secrets.AZURE_RESOURCE_GROUP }}
@@ -256,7 +291,7 @@ jobs:
           fi
 
       - name: Deploy via composite
-        uses: ./.github/actions/appservice-slot-deploy
+        uses: ./shared/.github/actions/appservice-slot-deploy
         with:
           resource-group: ${{ steps.resolve.outputs.rg }}
           app-name: ${{ inputs['app-name'] }}

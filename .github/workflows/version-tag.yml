@@ -21,6 +21,9 @@ jobs:
     name: Generate Pre-release Tag
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    outputs:
+      prerelease_tag: ${{ steps.version.outputs.prerelease_tag }}
+      bump_type: ${{ steps.version.outputs.bump_type }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -31,8 +34,8 @@ jobs:
         id: version
         shell: bash
         run: |
-          # Get the last version tag
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          # Get the last stable version tag (exclude prerelease tags)
+          LAST_TAG=$(git describe --tags --abbrev=0 --match="v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "v1.0.0")
           echo "Last tag: $LAST_TAG"
           
           # Parse version (remove 'v' prefix)
@@ -43,24 +46,27 @@ jobs:
           PATCH=${VER[2]}
           
           # Analyze commits since last tag to determine bump type
-          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+          # EXCLUDE commits with [skip version] marker or from github-actions bot
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s|%an" 2>/dev/null || git log --pretty=format:"%s|%an")
+          COMMITS=$(echo "$COMMITS" | grep -v "\[skip version\]" | grep -v "github-actions\[bot\]" || echo "")
+          COMMIT_MESSAGES=$(echo "$COMMITS" | cut -d'|' -f1)
           
           # Check for breaking changes
-          if echo "$COMMITS" | grep -qiE "^(feat|fix|chore|docs|refactor|perf|test|build|ci|style)(\(.+\))?!:" || \
-             echo "$COMMITS" | grep -qiE "BREAKING CHANGE:"; then
+          if echo "$COMMIT_MESSAGES" | grep -qiE "^(feat|fix|chore|docs|refactor|perf|test|build|ci|style)(\(.+\))?!:" || \
+             echo "$COMMIT_MESSAGES" | grep -qiE "BREAKING CHANGE:"; then
             # Major version bump
             MAJOR=$((MAJOR + 1))
             MINOR=0
             PATCH=0
             BUMP_TYPE="major"
           # Check for new features
-          elif echo "$COMMITS" | grep -qiE "^feat(\(.+\))?:"; then
+          elif echo "$COMMIT_MESSAGES" | grep -qiE "^feat(\(.+\))?:"; then
             # Minor version bump
             MINOR=$((MINOR + 1))
             PATCH=0
             BUMP_TYPE="minor"
           # Check for fixes
-          elif echo "$COMMITS" | grep -qiE "^(fix|perf|refactor|chore)(\(.+\))?:"; then
+          elif echo "$COMMIT_MESSAGES" | grep -qiE "^(fix|perf|refactor|chore)(\(.+\))?:"; then
             # Patch version bump
             PATCH=$((PATCH + 1))
             BUMP_TYPE="patch"
@@ -92,16 +98,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Delete existing pre-release tags for this PR
           PR_NUMBER="${{ github.event.pull_request.number }}"
-          EXISTING_TAGS=$(git tag -l "v*-pr.${PR_NUMBER}.*")
-          for OLD_TAG in $EXISTING_TAGS; do
-            echo "🗑️  Deleting old tag: $OLD_TAG"
-            git tag -d "$OLD_TAG" || true
-            git push origin ":refs/tags/$OLD_TAG" || true
-          done
-          
-          # Create new pre-release tag
+
+          # Never delete old prerelease tags (consumers may have pinned them).
+          # Create a new, commit-addressed tag for traceability.
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "ℹ️  Tag $TAG already exists - skipping creation"
+            exit 0
+          fi
+
           echo "✨ Creating pre-release tag: $TAG"
           git tag -a "$TAG" -m "Pre-release for PR #$PR_NUMBER"
           git push origin "$TAG"
@@ -171,7 +176,10 @@ jobs:
   release-tag:
     name: Generate Release Tag
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      bump_type: ${{ steps.version.outputs.bump_type }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -194,20 +202,23 @@ jobs:
           PATCH=${VER[2]}
           
           # Analyze commits since last tag
-          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+          # EXCLUDE commits with [skip version] marker or from github-actions bot
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s|%an" 2>/dev/null || git log --pretty=format:"%s|%an")
+          COMMITS=$(echo "$COMMITS" | grep -v "\[skip version\]" | grep -v "github-actions\[bot\]" || echo "")
+          COMMIT_MESSAGES=$(echo "$COMMITS" | cut -d'|' -f1)
           
           # Determine version bump
-          if echo "$COMMITS" | grep -qiE "^(feat|fix|chore|docs|refactor|perf|test|build|ci|style)(\(.+\))?!:" || \
-             echo "$COMMITS" | grep -qiE "BREAKING CHANGE:"; then
+          if echo "$COMMIT_MESSAGES" | grep -qiE "^(feat|fix|chore|docs|refactor|perf|test|build|ci|style)(\(.+\))?!:" || \
+             echo "$COMMIT_MESSAGES" | grep -qiE "BREAKING CHANGE:"; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
             PATCH=0
             BUMP_TYPE="major"
-          elif echo "$COMMITS" | grep -qiE "^feat(\(.+\))?:"; then
+          elif echo "$COMMIT_MESSAGES" | grep -qiE "^feat(\(.+\))?:"; then
             MINOR=$((MINOR + 1))
             PATCH=0
             BUMP_TYPE="minor"
-          elif echo "$COMMITS" | grep -qiE "^(fix|perf|refactor|chore)(\(.+\))?:"; then
+          elif echo "$COMMIT_MESSAGES" | grep -qiE "^(fix|perf|refactor|chore)(\(.+\))?:"; then
             PATCH=$((PATCH + 1))
             BUMP_TYPE="patch"
           else
@@ -269,7 +280,8 @@ jobs:
   cleanup-prereleases:
     name: Cleanup Old Pre-release Tags
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Disabled: deleting prerelease tags can break downstream repos pinned to older prerelease versions.
+    if: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -305,3 +317,4 @@ jobs:
           done
           
           echo "✅ Cleanup complete"
+

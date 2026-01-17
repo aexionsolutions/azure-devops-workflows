@@ -31,6 +31,7 @@ runs:
     - id: detect
       name: Detect SonarCloud settings
       shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR || '.' }}
       env:
         REQ: ${{ inputs.requested }}
         TOKEN: ${{ inputs.token }}
