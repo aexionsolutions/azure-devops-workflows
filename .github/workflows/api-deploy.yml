@@ -85,6 +85,10 @@ jobs:
       PACKAGE: api.zip
       BRANCH_NAME: "${{ github.ref_name || github.event.repository.default_branch || 'main' }}"
       DEFAULT_BRANCH: "${{ github.event.repository.default_branch || 'main' }}"
+      CALLER_WORKDIR: caller
+    defaults:
+      run:
+        working-directory: caller
     outputs:
       version: ${{ steps.derive_version.outputs.version }}
     steps:
@@ -108,13 +112,33 @@ jobs:
             echo "✓ DEPLOY MODE: Will download from release and deploy"
           fi
 
-      - name: Checkout repository (no token persisted)
-        if: github.event_name != 'pull_request'
+      - name: Resolve called workflow ref
+        id: wfref
+        shell: bash
+        working-directory: .
+        run: |
+          set -e
+          REF="${GITHUB_WORKFLOW_REF##*@}"
+          if [ -z "$REF" ]; then REF="${GITHUB_SHA}"; fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved workflow ref: $REF"
+
+      - name: Checkout caller repo (no token persisted)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || '' }}
           persist-credentials: false
+          path: caller
+
+      - name: Checkout shared workflows repo (no token persisted)
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: shared
 
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: '10.0.x' }
@@ -139,7 +163,7 @@ jobs:
 
       - name: Detect SonarCloud settings
         id: sonar
-        uses: ./.github/actions/sonar-detect
+        uses: ./shared/.github/actions/sonar-detect
         with:
           requested: true
           token: ${{ secrets.SONAR_TOKEN }}
@@ -170,7 +194,7 @@ jobs:
 
       - name: SonarCloud Begin (build)
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
-        uses: ./.github/actions/sonar-dotnet-begin
+        uses: ./shared/.github/actions/sonar-dotnet-begin
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -197,7 +221,7 @@ jobs:
         # Make non-blocking; only run on default branch builds
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
         continue-on-error: true
-        uses: ./.github/actions/sonar-dotnet-end
+        uses: ./shared/.github/actions/sonar-dotnet-end
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 
@@ -216,7 +240,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: api-package
-          path: ${{ env.PACKAGE }}
+          path: caller/${{ env.PACKAGE }}
           if-no-files-found: warn
           retention-days: 7
 
@@ -227,7 +251,7 @@ jobs:
           name: api-tests-and-coverage
           path: |
             **/TestResults/**
-            coverage-report/**
+            caller/coverage-report/**
             **/coverage.cobertura.xml
           if-no-files-found: warn
           retention-days: 7
@@ -246,7 +270,7 @@ jobs:
         with:
           tag_name: ${{ steps.derive_version.outputs.version }}
           name: ${{ steps.derive_version.outputs.version }}
-          files: api-tests.zip
+          files: caller/api-tests.zip
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attach api.zip to Release (tag build)
@@ -255,7 +279,7 @@ jobs:
         with:
           tag_name: ${{ steps.derive_version.outputs.version }}
           name: ${{ steps.derive_version.outputs.version }}
-          files: ${{ env.PACKAGE }}
+          files: caller/${{ env.PACKAGE }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Inspect release state (seed)

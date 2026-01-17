@@ -34,13 +34,16 @@ inputs:
     default: ""
   js_lcov:
     description: Path to JS/TS lcov report (for web coverage)
-    required: true
+    required: false
+    default: ""
   sonar_exclusions:
     description: SonarCloud file exclusions (comma-separated patterns)
-    required: true
+    required: false
+    default: ""
   sonar_coverage_exclusions:
     description: SonarCloud coverage exclusions (comma-separated patterns)
-    required: true
+    required: false
+    default: ""
   sonar_infra_exclusions:
     description: Infrastructure-specific exclusions (optional)
     required: false
@@ -51,10 +54,12 @@ runs:
   steps:
     - name: Install SonarScanner for .NET
       shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR || '.' }}
       run: dotnet tool install --global dotnet-sonarscanner || true
 
     - name: SonarCloud Begin
       shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR || '.' }}
       env:
         SONAR_TOKEN: ${{ inputs.token }}
         SONAR_ORG: ${{ inputs.org }}
@@ -71,8 +76,8 @@ runs:
       run: |
         set -e
         export PATH="$PATH:$HOME/.dotnet/tools"
-        # Force project base dir to the repository root for consistent behavior across Scanner v8+ changes
-        PBDIR="${GITHUB_WORKSPACE:-$(pwd)}"
+        # Base dir should match the caller repo working directory (where build/test runs)
+        PBDIR="$(pwd)"
         
         # Build exclusions dynamically
         FULL_EXCLUSIONS="${SONAR_EXCLUSIONS}"

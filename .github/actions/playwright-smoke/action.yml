@@ -20,7 +20,7 @@ runs:
   steps:
     - name: Install and run Playwright
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
       env:
         BASE_URL: ${{ inputs.base-url }}
       run: |
@@ -32,7 +32,7 @@ runs:
     - name: Deployed auth smoke (real B2C)
       if: ${{ inputs.run-auth-smoke == 'true' }}
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
       env:
         BASE_URL: ${{ inputs.base-url }}
       run: |
@@ -45,7 +45,7 @@ runs:
       with:
         name: ${{ inputs.artifact-name }}
         path: |
-          ${{ inputs.working-directory }}/playwright-report/**
-          ${{ inputs.working-directory }}/test-results/**
+          ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}/playwright-report/**
+          ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}/test-results/**
         if-no-files-found: ignore
         retention-days: 7
