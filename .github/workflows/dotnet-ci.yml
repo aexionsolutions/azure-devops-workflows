@@ -10,7 +10,6 @@ on:
       solution:
         required: true
         type: string
-        default: TEMS.sln
       coverage_threshold:
         required: false
         type: number
@@ -85,6 +84,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
+    env:
+      CALLER_WORKDIR: caller
+
+    defaults:
+      run:
+        working-directory: caller
     
     # Docker services for integration tests (PostgreSQL + Azurite)
     # These run ONLY when run_integration: true
@@ -115,10 +121,30 @@ jobs:
           - 10002:10002
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Resolve called workflow ref
+        id: wfref
+        shell: bash
+        run: |
+          set -e
+          REF="${GITHUB_WORKFLOW_REF##*@}"
+          if [ -z "$REF" ]; then REF="${GITHUB_SHA}"; fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved workflow ref: $REF"
+
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Checkout shared workflows repo
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 0
+          path: shared
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -132,7 +158,7 @@ jobs:
 
       - name: Detect SonarCloud
         id: sonar
-        uses: ./.github/actions/sonar-detect
+        uses: ./shared/.github/actions/sonar-detect
         with:
           requested: ${{ inputs.sonar_enabled }}
           token: ${{ secrets.SONAR_TOKEN }}
@@ -166,7 +192,7 @@ jobs:
 
       - name: Install SonarScanner for .NET
         if: steps.sonar.outputs.enabled == 'true'
-        uses: ./.github/actions/sonar-dotnet-begin
+        uses: ./shared/.github/actions/sonar-dotnet-begin
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -307,7 +333,7 @@ jobs:
           fi
       - name: Web unit tests + coverage (vitest)
         if: inputs.run_web_unit_tests == true
-        working-directory: ${{ inputs.web_working_directory }}
+        working-directory: caller/${{ inputs.web_working_directory }}
         run: |
           rm -f package-lock.json
           npm install
@@ -318,7 +344,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: web-coverage
-          path: ${{ inputs.web_working_directory }}/coverage/**
+          path: caller/${{ inputs.web_working_directory }}/coverage/**
           if-no-files-found: warn
           retention-days: 7
 
@@ -333,7 +359,7 @@ jobs:
 
       - name: SonarCloud End
         if: steps.sonar.outputs.enabled == 'true'
-        uses: ./.github/actions/sonar-dotnet-end
+        uses: ./shared/.github/actions/sonar-dotnet-end
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 
@@ -343,13 +369,14 @@ jobs:
           name: dotnet-ci-artifacts
           path: |
             **/TestResults/**
-            coverage-report/**
+            caller/coverage-report/**
             **/coverage.cobertura.xml
           if-no-files-found: warn
           retention-days: 7
 
       - name: Detect code changes
         id: code_changes
+        if: github.event_name == 'pull_request'
         shell: bash
         run: |
           # Check if any actual code files changed (not just workflows/docs)
@@ -358,16 +385,16 @@ jobs:
           
           if echo "$CHANGED_FILES" | grep -qE '\.(cs|csproj|sln)$'; then
             CODE_CHANGED=true
-            echo " Code files changed - coverage enforcement applies"
+            echo "📝 Code files changed - coverage enforcement applies"
           else
-            echo "ℹ No code files changed - skipping coverage enforcement"
+            echo "ℹ️ No code files changed - skipping coverage enforcement"
           fi
           
           echo "CODE_CHANGED=$CODE_CHANGED" >> $GITHUB_OUTPUT
           echo "::notice::Code changed: $CODE_CHANGED"
 
       - name: Enforce coverage threshold (final)
-        if: inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && steps.code_changes.outputs.CODE_CHANGED == 'true'
+        if: inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && (github.event_name != 'pull_request' || steps.code_changes.outputs.CODE_CHANGED == 'true')
         shell: bash
         run: |
           echo "::error::Coverage threshold not met - see coverage check step for details"
