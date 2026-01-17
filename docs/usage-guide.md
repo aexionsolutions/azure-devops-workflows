@@ -57,7 +57,7 @@ on:
 
 jobs:
   deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v4.1.0
     with:
       environment: ${{ inputs.environment }}
       azure_location: ukwest
@@ -71,12 +71,14 @@ jobs:
       POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
 ```
 
+> **Note**: Version tags are auto-generated based on Conventional Commits. Use `@v4.1.0` for stable releases or `@v4.1.0-pr.3.abc123` for pre-release testing.
+
 ### Advanced Usage (with all options)
 
 ```yaml
 jobs:
   deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v4.1.0
     with:
       # Required
       environment: dev
