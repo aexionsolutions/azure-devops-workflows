@@ -142,7 +142,7 @@ jobs:
           fi
 
       - name: Web smoke (Playwright)
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/playwright-smoke@main
+        uses: ./.github/actions/playwright-smoke
         env:
           B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}

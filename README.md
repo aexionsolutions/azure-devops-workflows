@@ -240,7 +240,10 @@ This repository uses **fully automated versioning** based on [Conventional Commi
 1. **Create PR** → Pre-release tag automatically generated (e.g., `v4.1.0-pr.3.abc123`)
 2. **Test pre-release** → Use pre-release tag in calling repos for validation
 3. **Merge to main** → Stable tag automatically created (e.g., `v4.1.0`)
-4. **Internal action pinning** → All internal composite actions automatically pinned to match version
+
+### 🔒 Version Immutability
+
+When you reference a workflow at a specific tag (e.g., `@v4.1.0`), **the entire workflow tree is immutable**. All internal composite actions use relative paths (`uses: ./.github/actions/sonar-detect`), so they automatically resolve within that exact git snapshot. No separate pinning needed.
 
 ### Version Bump Rules
 

@@ -131,7 +131,7 @@ jobs:
 
       - name: Detect SonarCloud
         id: sonar
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@main
+        uses: ./.github/actions/sonar-detect
         with:
           requested: ${{ inputs.sonar_enabled }}
           token: ${{ secrets.SONAR_TOKEN }}
@@ -165,7 +165,7 @@ jobs:
 
       - name: Install SonarScanner for .NET
         if: steps.sonar.outputs.enabled == 'true'
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@main
+        uses: ./.github/actions/sonar-dotnet-begin
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -332,7 +332,7 @@ jobs:
 
       - name: SonarCloud End
         if: steps.sonar.outputs.enabled == 'true'
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@main
+        uses: ./.github/actions/sonar-dotnet-end
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 
@@ -349,6 +349,7 @@ jobs:
 
       - name: Detect code changes
         id: code_changes
+        if: github.event_name == 'pull_request'
         shell: bash
         run: |
           # Check if any actual code files changed (not just workflows/docs)
@@ -357,16 +358,16 @@ jobs:
           
           if echo "$CHANGED_FILES" | grep -qE '\.(cs|csproj|sln)$'; then
             CODE_CHANGED=true
-            echo " Code files changed - coverage enforcement applies"
+            echo "📝 Code files changed - coverage enforcement applies"
           else
-            echo "ℹ No code files changed - skipping coverage enforcement"
+            echo "ℹ️ No code files changed - skipping coverage enforcement"
           fi
           
           echo "CODE_CHANGED=$CODE_CHANGED" >> $GITHUB_OUTPUT
           echo "::notice::Code changed: $CODE_CHANGED"
 
       - name: Enforce coverage threshold (final)
-        if: inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && steps.code_changes.outputs.CODE_CHANGED == 'true'
+        if: inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && (github.event_name != 'pull_request' || steps.code_changes.outputs.CODE_CHANGED == 'true')
         shell: bash
         run: |
           echo "::error::Coverage threshold not met - see coverage check step for details"

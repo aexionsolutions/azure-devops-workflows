@@ -269,6 +269,10 @@ uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deplo
 uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@main
 ```
 
+**💡 How version immutability works:**
+
+When you reference `@v1.2.0`, GitHub checks out that exact git snapshot. All internal composite actions use relative paths (`uses: ./.github/actions/action-name`), which automatically resolve within that snapshot. This ensures the entire workflow tree is locked to the same version without any additional pinning logic.
+
 ### 2. Secrets Management
 
 **Use environment secrets for environment-specific values**:
