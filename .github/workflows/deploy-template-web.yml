@@ -131,20 +131,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Extract workflow ref
-        id: workflow_ref
-        shell: bash
-        run: |
-          if [ -n "${{ inputs.workflow_version }}" ]; then
-            REF="${{ inputs.workflow_version }}"
-          elif [ -n "${{ github.workflow_ref }}" ]; then
-            WORKFLOW_REF="${{ github.workflow_ref }}"
-            REF="${WORKFLOW_REF##*@}"
-          else
-            REF="main"
-          fi
-          echo "ref=$REF" >> $GITHUB_OUTPUT
-
       - name: Decide base URL
         id: base
         shell: bash
@@ -161,7 +147,7 @@ jobs:
           fi
 
       - name: Web smoke (Playwright)
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/playwright-smoke@${{ steps.workflow_ref.outputs.ref }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/playwright-smoke@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
         env:
           B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
