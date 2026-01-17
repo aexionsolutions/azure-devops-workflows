@@ -14,6 +14,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write  # Required to allow updating workflow files
 
 jobs:
   # Generate pre-release tag when PR is created/updated
@@ -181,6 +182,7 @@ jobs:
     if: github.event_name == 'pull_request' && needs.prerelease-tag.outputs.bump_type != 'none' && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
+      actions: write  # Required to update workflow files
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -394,6 +396,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.release-tag.outputs.bump_type != 'none'
     permissions:
       contents: write
+      actions: write  # Required to update workflow files
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
