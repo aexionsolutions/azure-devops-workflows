@@ -248,10 +248,12 @@ When you reference a workflow at a specific tag (e.g., `@v4.1.0`), **the workflo
 Because reusable workflows execute in the *calling repo's* workspace, internal composite actions from this repo are resolved via a **dual-checkout** pattern:
 
 - The calling repo is checked out into `caller/` (this is where build/test commands run)
-- This repo is checked out into `shared/` at the exact same `@ref` the reusable workflow was invoked with (derived from `GITHUB_WORKFLOW_REF`)
+- This repo is checked out into `shared/` at the same `@ref` the caller pinned in `uses: ...@ref` (passed explicitly as `shared_ref`)
 - Composite actions are invoked from `./shared/.github/actions/...`
 
 This keeps the reusable workflow + its internal actions locked to the same tag/branch without needing any workflow-file rewriting.
+
+**Important:** GitHub does not provide the `uses: ...@ref` value to the called workflow at runtime. If you pin to a tag (stable or prerelease), pass `with: shared_ref: <same ref>`.
 
 ### Version Bump Rules
 

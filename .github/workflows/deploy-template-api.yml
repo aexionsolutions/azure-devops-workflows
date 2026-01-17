@@ -3,6 +3,11 @@ name: Template - Deploy API (App Service)
 on:
   workflow_call:
     inputs:
+      shared_ref:
+        description: 'Ref (tag/sha/branch) of aexionsolutions/azure-devops-workflows to checkout into ./shared. Set this to the same @ref used in the calling repo. If omitted, defaults to main.'
+        required: false
+        type: string
+        default: ''
       environment:
         required: true
         type: string
@@ -148,16 +153,22 @@ jobs:
     outputs:
       base_url: ${{ steps.base.outputs.url }}
     steps:
-      - name: Resolve called workflow ref
+      - name: Resolve shared workflows ref
         id: wfref
         shell: bash
         working-directory: .
         run: |
-          set -e
-          REF="${GITHUB_WORKFLOW_REF##*@}"
-          if [ -z "$REF" ]; then REF="${GITHUB_SHA}"; fi
+          set -euo pipefail
+          INPUT_REF="${{ inputs.shared_ref }}"
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            REF="main"
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "Resolved workflow ref: $REF"
+          echo "Resolved shared workflows ref: $REF"
 
       - name: Checkout caller repo (no token persisted)
         uses: actions/checkout@v4

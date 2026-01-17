@@ -276,9 +276,11 @@ When you reference `@v1.2.0`, GitHub pins the reusable workflow to that exact sn
 Reusable workflows run inside the *calling repo* workspace, so this repo’s internal composite actions are resolved by checking out two folders:
 
 - `caller/`: the calling repo (where `run:` steps execute)
-- `shared/`: this repo at the same `@ref` the workflow was invoked with (derived from `GITHUB_WORKFLOW_REF`)
+- `shared/`: this repo at the same `@ref` the caller pinned in `uses: ...@ref` (passed explicitly as `shared_ref`)
 
 Composite actions are then referenced from `./shared/.github/actions/...`, keeping the workflow + its internals locked to the same version.
+
+If you pin a workflow to a tag (stable or prerelease), set `with: shared_ref: <same tag>`.
 
 ### 2. Secrets Management
 
