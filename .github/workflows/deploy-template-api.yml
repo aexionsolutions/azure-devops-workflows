@@ -101,20 +101,206 @@ permissions:
 jobs:
   deploy-staging:
     name: Deploy to Staging
-    uses: ./.github/workflows/appservice-slot-deploy.yml
-    with:
-      environment: ${{ inputs.environment }}
-      resource-group: ${{ inputs.resource-group }}
-      app-name: ${{ inputs.app-name }}
-      artifact-name: ${{ inputs.artifact-name }}
-      package: ${{ inputs.package }}
-      use-slot: auto
-      warmup-url-staging: ${{ inputs.warmup-url-staging }}
-      warmup-url-prod: ${{ inputs.warmup-url-prod }}
-      skip-swap: 'true'
-      run-from-package: ${{ inputs['run-from-package'] }}
-      display-name: Deploy to Staging
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      CALLER_WORKDIR: caller
+    outputs:
+      use_slot: ${{ steps.resolve.outputs.use_slot }}
+    steps:
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          INPUT_REF="${{ inputs.shared_ref }}"
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            REF="main"
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
+
+      - name: Checkout caller repo (no token persisted)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          path: caller
+
+      - name: Checkout shared workflows repo (no token persisted)
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: shared
+
+      - name: Azure login (smart)
+        uses: ./shared/.github/actions/azure-login-smart
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Download artifact (if provided)
+        if: inputs['artifact-name'] != ''
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs['artifact-name'] }}
+          path: _pkg
+
+      - name: Debug downloaded artifact
+        if: inputs['artifact-name'] != ''
+        shell: bash
+        run: |
+          echo "Contents of _pkg after download:"
+          ls -lah _pkg/ || true
+          find _pkg -type f -name "*.zip" -exec file {} \; || true
+          find _pkg -type f -name "*.zip" -exec ls -lh {} \; || true
+
+      - name: Resolve Resource Group (fallback if not provided)
+        id: rgres
+        if: inputs['resource-group'] == ''
+        uses: ./shared/.github/actions/resolve-rg
+        with:
+          environment: ${{ inputs['environment'] }}
+          default: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          dev: ${{ secrets.AZURE_RG_DEV }}
+          uat: ${{ secrets.AZURE_RG_UAT }}
+          preprod: ${{ secrets.AZURE_RG_PREPROD }}
+          prod: ${{ secrets.AZURE_RG_PROD }}
+          verify-exists: 'true'
+          fail-on-missing: 'true'
+
+      - name: Resolve package path and slot support
+        id: resolve
+        shell: bash
+        env:
+          PKG_INPUT: ${{ inputs['package'] }}
+          ARTIFACT_NAME: ${{ inputs['artifact-name'] }}
+          USE_SLOT_INPUT: auto
+          RFP_IN: ${{ inputs['run-from-package'] }}
+          RG_INPUT: ${{ inputs['resource-group'] }}
+          RG_FALLBACK: ${{ steps.rgres.outputs.resource-group }}
+          APP: ${{ inputs['app-name'] }}
+          ENVIRONMENT: ${{ inputs['environment'] }}
+        run: |
+          set -euo pipefail
+          RG="${RG_INPUT:-}"
+          if [ -z "$RG" ]; then RG="${RG_FALLBACK:-}"; fi
+          if [ -z "${RG:-}" ]; then
+            echo "Missing input: resource-group and fallback resolution failed. Ensure a valid Resource Group is available." >&2
+            exit 1
+          fi
+          if [ -z "${APP:-}" ]; then
+            echo "Missing input: app-name. Ensure the caller passes 'app-name' to the reusable workflow." >&2
+            exit 1
+          fi
+          ART="$ARTIFACT_NAME"
+          if [ -n "$ART" ]; then
+            PKG=$(find _pkg -maxdepth 1 -type f -name "*.zip" | head -n1 || true)
+            if [ -z "$PKG" ]; then
+              echo "Artifact $ART did not contain a .zip file" >&2; exit 1
+            fi
+          else
+            PKG="$PKG_INPUT"
+          fi
+          if [ -z "$PKG" ]; then
+            echo "No package provided (inputs.package) and no artifact-name specified; one is required." >&2
+            exit 1
+          fi
+          echo "package=$PKG" >> $GITHUB_OUTPUT
+
+          USE="$USE_SLOT_INPUT"
+          if [ "$USE" = "auto" ]; then
+            PLAN_ID=$(az webapp show -g "$RG" -n "$APP" --query serverFarmId -o tsv 2>/dev/null || true)
+            if [ -z "$PLAN_ID" ]; then
+              echo "Could not determine App Service Plan for $APP in RG $RG; defaulting to no slot (use-slot=false)." >&2
+              USE=false
+            else
+              TIER=$(az appservice plan show --ids "$PLAN_ID" --query sku.tier -o tsv 2>/dev/null || true)
+              if [ -z "$TIER" ]; then
+                echo "Could not read plan SKU tier; defaulting to no slot (use-slot=false)." >&2
+                USE=false
+              else
+                case "$TIER" in
+                  Standard|Premium|PremiumV2|PremiumV3|Isolated|IsolatedV2) USE=true;;
+                  *) USE=false;;
+                esac
+              fi
+            fi
+          fi
+          echo "use_slot=$USE" >> $GITHUB_OUTPUT
+
+          RFP=$(echo "${RFP_IN:-false}" | tr '[:upper:]' '[:lower:]')
+          case "$RFP" in
+            true|false) : ;;
+            *) RFP=false ;;
+          esac
+          echo "run_from_package=$RFP" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+
+      - name: Configure WEBSITE_RUN_FROM_PACKAGE
+        shell: bash
+        env:
+          RG: ${{ steps.resolve.outputs.rg }}
+          APP: ${{ inputs['app-name'] }}
+          USE: ${{ steps.resolve.outputs.use_slot }}
+          RFP: ${{ steps.resolve.outputs.run_from_package }}
+        run: |
+          set -euo pipefail
+          if [ "$RFP" = "true" ]; then
+            if [ "$USE" = "true" ]; then
+              az webapp config appsettings set -g "$RG" -n "$APP" --slot staging --settings WEBSITE_RUN_FROM_PACKAGE=1
+            else
+              az webapp config appsettings set -g "$RG" -n "$APP" --settings WEBSITE_RUN_FROM_PACKAGE=1
+            fi
+          else
+            if [ "$USE" = "true" ]; then
+              az webapp config appsettings delete -g "$RG" -n "$APP" --slot staging --setting-names WEBSITE_RUN_FROM_PACKAGE || true
+            else
+              az webapp config appsettings delete -g "$RG" -n "$APP" --setting-names WEBSITE_RUN_FROM_PACKAGE || true
+            fi
+          fi
+
+      - name: Set BUILD_VERSION app setting
+        if: inputs['expect-version'] != ''
+        shell: bash
+        env:
+          RG: ${{ steps.resolve.outputs.rg }}
+          APP: ${{ inputs['app-name'] }}
+          VERSION: ${{ inputs['expect-version'] }}
+          ENV: ${{ inputs['environment'] }}
+          USE: ${{ steps.resolve.outputs.use_slot }}
+        run: |
+          set -euo pipefail
+          echo "Setting BUILD_VERSION=$VERSION on $APP..."
+          if [ "$USE" = "true" ]; then
+            az webapp config appsettings set -g "$RG" -n "$APP" --slot staging --settings BUILD_VERSION="$VERSION" ENV="$ENV"
+            az webapp config appsettings set -g "$RG" -n "$APP" --settings BUILD_VERSION="$VERSION" ENV="$ENV"
+          else
+            az webapp config appsettings set -g "$RG" -n "$APP" --settings BUILD_VERSION="$VERSION" ENV="$ENV"
+          fi
+
+      - name: Deploy via composite
+        uses: ./shared/.github/actions/appservice-slot-deploy
+        with:
+          resource-group: ${{ steps.resolve.outputs.rg }}
+          app-name: ${{ inputs['app-name'] }}
+          package: ${{ steps.resolve.outputs.package }}
+          use-slot: ${{ steps.resolve.outputs.use_slot }}
+          warmup-url-staging: ${{ inputs['warmup-url-staging'] }}
+          warmup-url-prod: ${{ inputs['warmup-url-prod'] }}
+          skip-swap: 'true'
+          expect-version: ${{ inputs['expect-version'] }}
+          version-url: ${{ inputs['version-url'] }}
 
   parity-gate:
     name: Preprod parity gate
@@ -408,22 +594,177 @@ jobs:
       always() &&
       (needs.verify-api.result == 'success') &&
       (inputs.environment != 'prod' || inputs['require-preprod-parity'] != 'true' || needs.parity-gate.result == 'success')
-    uses: ./.github/workflows/appservice-slot-deploy.yml
-    with:
-      environment: ${{ inputs.environment }}
-      resource-group: ${{ inputs.resource-group }}
-      app-name: ${{ inputs.app-name }}
-      artifact-name: ${{ inputs.artifact-name }}
-      package: ${{ inputs.package }}
-      use-slot: auto
-      warmup-url-staging: ${{ inputs.warmup-url-staging }}
-      warmup-url-prod: ${{ inputs.warmup-url-prod }}
-      skip-deploy: 'true'
-      expect-version: ${{ inputs['expect-version'] }}
-      version-url: ${{ inputs['version-url'] }}
-      run-from-package: ${{ inputs['run-from-package'] }}
-      display-name: Deploy to Production
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      CALLER_WORKDIR: caller
+    steps:
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          INPUT_REF="${{ inputs.shared_ref }}"
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            REF="main"
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
+
+      - name: Checkout caller repo (no token persisted)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          path: caller
+
+      - name: Checkout shared workflows repo (no token persisted)
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: shared
+
+      - name: Azure login (smart)
+        uses: ./shared/.github/actions/azure-login-smart
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Download artifact (if provided)
+        if: inputs['artifact-name'] != ''
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs['artifact-name'] }}
+          path: _pkg
+
+      - name: Resolve Resource Group (fallback if not provided)
+        id: rgres
+        if: inputs['resource-group'] == ''
+        uses: ./shared/.github/actions/resolve-rg
+        with:
+          environment: ${{ inputs['environment'] }}
+          default: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          dev: ${{ secrets.AZURE_RG_DEV }}
+          uat: ${{ secrets.AZURE_RG_UAT }}
+          preprod: ${{ secrets.AZURE_RG_PREPROD }}
+          prod: ${{ secrets.AZURE_RG_PROD }}
+          verify-exists: 'true'
+          fail-on-missing: 'true'
+
+      - name: Resolve package path and slot support
+        id: resolve
+        shell: bash
+        env:
+          PKG_INPUT: ${{ inputs['package'] }}
+          ARTIFACT_NAME: ${{ inputs['artifact-name'] }}
+          USE_SLOT_INPUT: ${{ needs.deploy-staging.outputs.use_slot }}
+          RFP_IN: ${{ inputs['run-from-package'] }}
+          RG_INPUT: ${{ inputs['resource-group'] }}
+          RG_FALLBACK: ${{ steps.rgres.outputs.resource-group }}
+          APP: ${{ inputs['app-name'] }}
+          ENVIRONMENT: ${{ inputs['environment'] }}
+        run: |
+          set -euo pipefail
+          RG="${RG_INPUT:-}"
+          if [ -z "$RG" ]; then RG="${RG_FALLBACK:-}"; fi
+          if [ -z "${RG:-}" ]; then
+            echo "Missing input: resource-group and fallback resolution failed. Ensure a valid Resource Group is available." >&2
+            exit 1
+          fi
+          if [ -z "${APP:-}" ]; then
+            echo "Missing input: app-name. Ensure the caller passes 'app-name' to the reusable workflow." >&2
+            exit 1
+          fi
+          ART="$ARTIFACT_NAME"
+          if [ -n "$ART" ]; then
+            PKG=$(find _pkg -maxdepth 1 -type f -name "*.zip" | head -n1 || true)
+            if [ -z "$PKG" ]; then
+              echo "Artifact $ART did not contain a .zip file" >&2; exit 1
+            fi
+          else
+            PKG="$PKG_INPUT"
+          fi
+          if [ -z "$PKG" ]; then
+            echo "No package provided (inputs.package) and no artifact-name specified; one is required." >&2
+            exit 1
+          fi
+          echo "package=$PKG" >> $GITHUB_OUTPUT
+
+          USE="$USE_SLOT_INPUT"
+          echo "use_slot=$USE" >> $GITHUB_OUTPUT
+
+          RFP=$(echo "${RFP_IN:-false}" | tr '[:upper:]' '[:lower:]')
+          case "$RFP" in
+            true|false) : ;;
+            *) RFP=false ;;
+          esac
+          echo "run_from_package=$RFP" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+
+      - name: Configure WEBSITE_RUN_FROM_PACKAGE
+        shell: bash
+        env:
+          RG: ${{ steps.resolve.outputs.rg }}
+          APP: ${{ inputs['app-name'] }}
+          USE: ${{ steps.resolve.outputs.use_slot }}
+          RFP: ${{ steps.resolve.outputs.run_from_package }}
+        run: |
+          set -euo pipefail
+          if [ "$RFP" = "true" ]; then
+            if [ "$USE" = "true" ]; then
+              az webapp config appsettings set -g "$RG" -n "$APP" --slot staging --settings WEBSITE_RUN_FROM_PACKAGE=1
+            else
+              az webapp config appsettings set -g "$RG" -n "$APP" --settings WEBSITE_RUN_FROM_PACKAGE=1
+            fi
+          else
+            if [ "$USE" = "true" ]; then
+              az webapp config appsettings delete -g "$RG" -n "$APP" --slot staging --setting-names WEBSITE_RUN_FROM_PACKAGE || true
+            else
+              az webapp config appsettings delete -g "$RG" -n "$APP" --setting-names WEBSITE_RUN_FROM_PACKAGE || true
+            fi
+          fi
+
+      - name: Set BUILD_VERSION app setting
+        if: inputs['expect-version'] != ''
+        shell: bash
+        env:
+          RG: ${{ steps.resolve.outputs.rg }}
+          APP: ${{ inputs['app-name'] }}
+          VERSION: ${{ inputs['expect-version'] }}
+          ENV: ${{ inputs['environment'] }}
+          USE: ${{ steps.resolve.outputs.use_slot }}
+        run: |
+          set -euo pipefail
+          echo "Setting BUILD_VERSION=$VERSION on $APP..."
+          if [ "$USE" = "true" ]; then
+            az webapp config appsettings set -g "$RG" -n "$APP" --slot staging --settings BUILD_VERSION="$VERSION" ENV="$ENV"
+            az webapp config appsettings set -g "$RG" -n "$APP" --settings BUILD_VERSION="$VERSION" ENV="$ENV"
+          else
+            az webapp config appsettings set -g "$RG" -n "$APP" --settings BUILD_VERSION="$VERSION" ENV="$ENV"
+          fi
+
+      - name: Swap slots + warmup production
+        uses: ./shared/.github/actions/appservice-slot-deploy
+        with:
+          resource-group: ${{ steps.resolve.outputs.rg }}
+          app-name: ${{ inputs['app-name'] }}
+          package: ${{ steps.resolve.outputs.package }}
+          use-slot: ${{ steps.resolve.outputs.use_slot }}
+          warmup-url-staging: ${{ inputs['warmup-url-staging'] }}
+          warmup-url-prod: ${{ inputs['warmup-url-prod'] }}
+          skip-deploy: 'true'
+          expect-version: ${{ inputs['expect-version'] }}
+          version-url: ${{ inputs['version-url'] }}
 
   verify-summary:
     name: Verify Failure Summary
