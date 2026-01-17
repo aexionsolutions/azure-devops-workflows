@@ -57,7 +57,7 @@ on:
 
 jobs:
   deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v4.1.0
     with:
       environment: ${{ inputs.environment }}
       azure_location: ukwest
@@ -71,12 +71,14 @@ jobs:
       POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
 ```
 
+> **Note**: Version tags are auto-generated based on Conventional Commits. Use `@v4.1.0` for stable releases or `@v4.1.0-pr.3.abc123` for pre-release testing.
+
 ### Advanced Usage (with all options)
 
 ```yaml
 jobs:
   deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v4.1.0
     with:
       # Required
       environment: dev
@@ -266,6 +268,10 @@ uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deplo
 ```yaml
 uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@main
 ```
+
+**💡 How version immutability works:**
+
+When you reference `@v1.2.0`, GitHub checks out that exact git snapshot. All internal composite actions use relative paths (`uses: ./.github/actions/action-name`), which automatically resolve within that snapshot. This ensures the entire workflow tree is locked to the same version without any additional pinning logic.
 
 ### 2. Secrets Management
 

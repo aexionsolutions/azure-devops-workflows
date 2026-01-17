@@ -55,7 +55,7 @@ on:
 
 jobs:
   ci:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v3.2.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.0.1
     with:
       solution: Ems.sln
       web_working_directory: web/tems-portal
@@ -89,7 +89,7 @@ on:
 
 jobs:
   build:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-deploy.yml@v3.2.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-deploy.yml@v4.0.1
     with:
       web_directory: web/tems-portal           # Required: No defaults
       concurrency_group: tems-web-build        # Required: Unique per repo
@@ -233,48 +233,104 @@ POSTGRES_ADMIN_PASSWORD  # PostgreSQL admin password
 
 ## 🔄 Versioning
 
-This repository follows [Semantic Versioning](https://semver.org/):
+This repository uses **fully automated versioning** based on [Conventional Commits](https://www.conventionalcommits.org/) and [Semantic Versioning](https://semver.org/).
 
-- **v1.0.0 → v2.0.0**: Breaking changes (update caller workflows required)
-- **v1.0.0 → v1.1.0**: New features (backward compatible)
-- **v1.0.0 → v1.0.1**: Bug fixes (backward compatible)
+### How It Works
+
+1. **Create PR** → Pre-release tag automatically generated (e.g., `v4.1.0-pr.3.abc123`)
+2. **Test pre-release** → Use pre-release tag in calling repos for validation
+3. **Merge to main** → Stable tag automatically created (e.g., `v4.1.0`)
+
+### 🔒 Version Immutability
+
+When you reference a workflow at a specific tag (e.g., `@v4.1.0`), **the entire workflow tree is immutable**. All internal composite actions use relative paths (`uses: ./.github/actions/sonar-detect`), so they automatically resolve within that exact git snapshot. No separate pinning needed.
+
+### Version Bump Rules
+
+Commit messages determine the version bump:
+
+- `feat!:` or `BREAKING CHANGE:` → **Major** version bump (v3.0.0 → v4.0.0)
+- `feat:` → **Minor** version bump (v3.0.0 → v3.1.0)
+- `fix:`, `chore:`, `refactor:`, `perf:` → **Patch** version bump (v3.0.0 → v3.0.1)
+- Other commits → **No version bump**
 
 ### Version Pinning Strategies
 
 ```yaml
-# ✅ Recommended: Pin to specific version
-uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.2.0
+# ✅ Production: Pin to stable version
+uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.1.0
 
-# ✅ Safe: Latest patch version
-uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.2
+# 🧪 Testing: Use pre-release tag from PR comment
+uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.1.0-pr.3.abc123
 
-# ✅ Moderate risk: Latest minor version
-uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1
+# ✅ Safe: Latest patch version (v4.1.x)
+uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.1
 
-# ⚠️ Not recommended for production: Always latest (may break)
-uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@main
+# ✅ Moderate risk: Latest minor version (v4.x.x)
+uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4
+
+# ⚠️ Not recommended for production: Always latest (may break without warning)
+uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@main
 ```
+
+### Testing Pre-releases
+
+When you create a PR in this repo, a bot comment provides the pre-release tag:
+
+```
+## 📦 Pre-release Tag Created
+
+**Tag:** `v4.1.0-pr.3.abc123`
+**Next Version:** `v4.1.0`
+**Bump Type:** `minor`
+
+### 🧪 Test this pre-release in calling repos:
+
+uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.1.0-pr.3.abc123
+```
+
+Copy the tag to your calling repo's workflow to test before merging.
 
 ## 🛠️ Development
 
-### Testing Changes
+### Making Changes
 
-1. Create feature branch: `git checkout -b feature/my-change`
-2. Make workflow changes
-3. Test from consumer repo using branch reference:
-   ```yaml
-   uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@feature/my-change
+1. **Create feature branch**:
+   ```bash
+   git checkout -b feature/my-change
    ```
-4. Create PR for review
-5. After merge, tag release: `git tag v1.1.0 && git push --tags`
+
+2. **Make changes** using conventional commits:
+   ```bash
+   git commit -m "feat: add new deployment workflow"
+   git commit -m "fix: resolve SonarCloud coverage issue"
+   git commit -m "feat!: remove deprecated workflow_ref parameter"
+   ```
+
+3. **Create PR** → Pre-release tag auto-generated (e.g., `v4.1.0-pr.3.abc123`)
+
+4. **Test pre-release** in calling repos:
+   ```yaml
+   # In TEMS/.github/workflows/pr-ci.yml
+   uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.1.0-pr.3.abc123
+   ```
+
+5. **Merge to main** → Stable tag auto-created (e.g., `v4.1.0`)
+
+6. **Update calling repos** to use stable tag:
+   ```yaml
+   uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.1.0
+   ```
 
 ### Contributing
 
-1. Follow existing workflow patterns and naming conventions
-2. Document all inputs, secrets, and outputs
-3. Add usage examples to [docs/examples/](docs/examples/)
-4. Test with both TEMS and RavenXpress before releasing
-5. Update [CHANGELOG.md](CHANGELOG.md) with changes
+1. ✅ Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages
+2. ✅ Follow existing workflow patterns and naming conventions
+3. ✅ Document all inputs, secrets, and outputs
+4. ✅ Add usage examples to [docs/examples/](docs/examples/)
+5. ✅ Test pre-release tags in calling repos (TEMS/RavenXpress) before merging
+6. ✅ Update [CHANGELOG.md](CHANGELOG.md) when releasing new versions
+7. ❌ **Never manually create version tags** - automation handles this
 
 ## 📊 Adoption Status
 
