@@ -12,6 +12,7 @@ runs:
   steps:
     - name: SonarCloud End
       shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR || '.' }}
       env:
         SONAR_TOKEN: ${{ inputs.token }}
       run: |
