@@ -100,6 +100,7 @@ jobs:
       - name: Debug trigger context
         if: always()
         shell: bash
+        working-directory: .
         run: |
           echo "Event:               ${{ github.event_name }}"
           echo "Repo default_branch: ${{ github.event.repository.default_branch }}"
@@ -460,9 +461,10 @@ jobs:
       - name: Debug seed context
         if: always() && github.event_name == 'workflow_dispatch'
         shell: bash
+        working-directory: .
         run: |
           echo "ENVIRONMENT='(n/a - build-only)'"
           echo "RELEASE_TAG='${{ inputs.release_tag }}'"
           echo "MODE='${{ steps.mode.outputs.mode }}'"
-          echo "PACKAGE_EXISTS='$([ -f "${{ env.PACKAGE }}" ] && echo yes || echo no)'"
+          echo "PACKAGE_EXISTS='$([ -f \"caller/${{ env.PACKAGE }}\" ] && echo yes || echo no)'"
 
