@@ -53,11 +53,6 @@ on:
         required: false
         type: string
         default: ''
-      workflow_version:
-        required: false
-        type: string
-        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions)'
-        default: ''
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -147,7 +142,7 @@ jobs:
           fi
 
       - name: Web smoke (Playwright)
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/playwright-smoke@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/playwright-smoke
         env:
           B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}

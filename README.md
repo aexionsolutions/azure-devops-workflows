@@ -57,7 +57,6 @@ jobs:
   ci:
     uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.0.1
     with:
-      workflow_version: v4.0.1  # Optional: Explicitly specify version for actions (auto-detected if omitted)
       solution: Ems.sln
       web_working_directory: web/tems-portal
       run_web_unit_tests: true

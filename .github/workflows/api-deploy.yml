@@ -61,11 +61,6 @@ on:
         description: 'Path to API project csproj (e.g., backend/src/Ems.Api/Ems.Api.csproj)'
         required: true
         type: string
-      workflow_version:
-        required: false
-        type: string
-        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions)'
-        default: ''
         
   # All automated triggers are orchestrated from main-verify.yml via workflow_dispatch
 
@@ -144,7 +139,7 @@ jobs:
 
       - name: Detect SonarCloud settings
         id: sonar
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect
         with:
           requested: true
           token: ${{ secrets.SONAR_TOKEN }}
@@ -175,7 +170,7 @@ jobs:
 
       - name: SonarCloud Begin (build)
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -202,7 +197,7 @@ jobs:
         # Make non-blocking; only run on default branch builds
         if: (steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed') && steps.sonar.outputs.enabled == 'true' && env.BRANCH_NAME == env.DEFAULT_BRANCH
         continue-on-error: true
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 

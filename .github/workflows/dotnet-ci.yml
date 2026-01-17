@@ -72,11 +72,6 @@ on:
         type: string
         description: 'Assembly filters for code coverage (e.g., -MyApp.Tests;-MyApp.Infrastructure). Test assemblies are automatically excluded.'
         default: ''
-      workflow_version:
-        required: false
-        type: string
-        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions). Defaults to github.action_ref if available.'
-        default: ''
     secrets:
       SONAR_TOKEN:
         required: false
@@ -137,7 +132,7 @@ jobs:
 
       - name: Detect SonarCloud
         id: sonar
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-detect
         with:
           requested: ${{ inputs.sonar_enabled }}
           token: ${{ secrets.SONAR_TOKEN }}
@@ -171,7 +166,7 @@ jobs:
 
       - name: Install SonarScanner for .NET
         if: steps.sonar.outputs.enabled == 'true'
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-begin
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           org: ${{ secrets.SONAR_ORG }}
@@ -338,7 +333,7 @@ jobs:
 
       - name: SonarCloud End
         if: steps.sonar.outputs.enabled == 'true'
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/sonar-dotnet-end
         with:
           token: ${{ secrets.SONAR_TOKEN }}
 

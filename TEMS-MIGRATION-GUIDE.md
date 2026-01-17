@@ -13,9 +13,8 @@ Version v4.0.1 fixes internal action versioning to ensure workflows and actions 
 5. ✅ **All hardcoded TEMS paths removed** - Generic for any repo
 
 ### What Changed in v4.0.1:
-- 🔧 **Fixed action versioning**: Workflows now use matching action versions (no more v4.0.0 workflow calling v3.1.5 actions)
-- 🔧 **Added `workflow_version` parameter**: Optional explicit version control for testing/debugging
-- 🔧 **Cross-repo compatibility**: Actions now correctly resolve when called from consuming repositories
+- 🔧 **Fixed action versioning**: Actions automatically use same ref as workflow (GitHub default behavior)
+- 🔧 **Cross-repo compatibility**: Works when TEMS calls workflows by tag/branch
 
 ### Why:
 - **Fail-safe**: Missing config = immediate error (not silent failure)

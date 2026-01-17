@@ -67,11 +67,6 @@ on:
         required: false
         default: ''
         type: string
-      workflow_version:
-        required: false
-        type: string
-        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions)'
-        default: ''
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -102,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Azure login (smart)
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/azure-login-smart@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/azure-login-smart
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -128,7 +123,7 @@ jobs:
       - name: Resolve Resource Group (fallback if not provided)
         id: rgres
         if: inputs['resource-group'] == ''
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/resolve-rg@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/resolve-rg
         with:
           environment: ${{ inputs['environment'] }}
           default: ${{ secrets.AZURE_RESOURCE_GROUP }}
@@ -261,7 +256,7 @@ jobs:
           fi
 
       - name: Deploy via composite
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/appservice-slot-deploy@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/appservice-slot-deploy
         with:
           resource-group: ${{ steps.resolve.outputs.rg }}
           app-name: ${{ inputs['app-name'] }}

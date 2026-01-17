@@ -73,11 +73,6 @@ on:
         required: false
         type: string
         default: ''
-      workflow_version:
-        required: false
-        type: string
-        description: 'Version/ref of azure-devops-workflows to use for actions (e.g., v4.0.1, fix/use-workflow-ref-for-actions)'
-        default: ''
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -154,7 +149,7 @@ jobs:
           persist-credentials: false
 
       - name: Azure login (smart)
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/azure-login-smart@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/azure-login-smart
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -179,7 +174,7 @@ jobs:
       - name: Resolve Resource Group (verify)
         id: rgres
         if: inputs['resource-group'] == ''
-        uses: aexionsolutions/azure-devops-workflows/.github/actions/resolve-rg@${{ inputs.workflow_version != '' && inputs.workflow_version || github.sha }}
+        uses: aexionsolutions/azure-devops-workflows/.github/actions/resolve-rg
         with:
           environment: ${{ inputs.environment }}
           default: ${{ secrets.AZURE_RESOURCE_GROUP }}
