@@ -57,7 +57,7 @@ on:
 
 jobs:
   deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v4.1.0
     with:
       environment: ${{ inputs.environment }}
       azure_location: ukwest
@@ -71,12 +71,14 @@ jobs:
       POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
 ```
 
+> **Note**: Version tags are auto-generated based on Conventional Commits. Use `@v4.1.0` for stable releases or `@v4.1.0-pr.3.abc123` for pre-release testing.
+
 ### Advanced Usage (with all options)
 
 ```yaml
 jobs:
   deploy:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v1.0.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@v4.1.0
     with:
       # Required
       environment: dev
@@ -266,6 +268,19 @@ uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deplo
 ```yaml
 uses: aexionsolutions/azure-devops-workflows/.github/workflows/azure-infra-deploy.yml@main
 ```
+
+**💡 How version immutability works:**
+
+When you reference `@v1.2.0`, GitHub pins the reusable workflow to that exact snapshot.
+
+Reusable workflows run inside the *calling repo* workspace, so this repo’s internal composite actions are resolved by checking out two folders:
+
+- `caller/`: the calling repo (where `run:` steps execute)
+- `shared/`: this repo at the same `@ref` the caller pinned in `uses: ...@ref` (passed explicitly as `shared_ref`)
+
+Composite actions are then referenced from `./shared/.github/actions/...`, keeping the workflow + its internals locked to the same version.
+
+If you pin a workflow to a tag (stable or prerelease), set `with: shared_ref: <same tag>`.
 
 ### 2. Secrets Management
 

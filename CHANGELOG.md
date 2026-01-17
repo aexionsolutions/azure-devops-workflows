@@ -63,14 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Silent path failures (now fail fast with clear errors)
 
 ### Added
-- [TEMS-MIGRATION-GUIDE.md](TEMS-MIGRATION-GUIDE.md) - Complete migration instructions
 - Comprehensive README with configuration examples for different repos
 - Self-documenting caller workflows (explicit inputs show repo structure)
 
 ### Migration Required
 **All calling repos (TEMS, RavenXpress) MUST update workflows before upgrading to v3.2.0**
 
-See [TEMS-MIGRATION-GUIDE.md](TEMS-MIGRATION-GUIDE.md) for complete instructions.
+See the README and docs/usage-guide.md for migration guidance.
 
 **Quick Summary for TEMS:**
 ```yaml
@@ -124,7 +123,7 @@ concurrency_group: tems-api-build
 - Real-world examples from TEMS project
 
 #### Scripts
-- `setup-repository.ps1`: Automated repository initialization and publishing
+- Repository initialization automation removed (no longer maintained)
 - `setup-azure-federated-credentials.ps1`: Azure OIDC credential setup
 
 ### Features
