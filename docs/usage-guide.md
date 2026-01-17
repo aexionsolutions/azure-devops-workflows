@@ -331,7 +331,7 @@ jobs:
   
   deploy:
     needs: ci  # Wait for CI to complete
-    uses: .../.github/workflows/azure-api-deploy.yml@v1.0.0
+    uses: .../.github/workflows/api-deploy.yml@v4.1.0
 ```
 
 ### 5. Testing Workflow Changes
@@ -375,6 +375,5 @@ uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v1.
 
 ## Next Steps
 
-- Review [Parameters Reference](parameters-reference.md) for complete input/secret documentation
-- Check [Examples](examples/) for real-world usage
-- See [Migration Guide](migration-guide.md) to migrate from inline workflows
+- Review the main documentation index in [README.md](../README.md)
+- Browse the available reusable workflows in [.github/workflows/](../.github/workflows/)

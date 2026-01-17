@@ -337,8 +337,7 @@ Copy the tag to your calling repo's workflow to test before merging.
 1. ✅ Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages
 2. ✅ Follow existing workflow patterns and naming conventions
 3. ✅ Document all inputs, secrets, and outputs
-4. ✅ Add usage examples to [docs/examples/](docs/examples/)
-5. ✅ Test pre-release tags in calling repos (TEMS/RavenXpress) before merging
+4. ✅ Test pre-release tags in calling repos (TEMS/RavenXpress) before merging
 6. ✅ Update [CHANGELOG.md](CHANGELOG.md) when releasing new versions
 7. ❌ **Never manually create version tags** - automation handles this
 
@@ -367,9 +366,8 @@ Copy the tag to your calling repo's workflow to test before merging.
 
 **Having issues?**
 1. Check [documentation](docs/)
-2. Review [examples](docs/examples/)
-3. Search [existing issues](https://github.com/aexionsolutions/azure-devops-workflows/issues)
-4. Open a [new issue](https://github.com/aexionsolutions/azure-devops-workflows/issues/new)
+2. Search [existing issues](https://github.com/aexionsolutions/azure-devops-workflows/issues)
+3. Open a [new issue](https://github.com/aexionsolutions/azure-devops-workflows/issues/new)
 
 ## 📝 License
 
