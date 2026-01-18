@@ -46,11 +46,12 @@ runs:
 
     - name: Ensure staging slot is started
       if: inputs.use-slot == 'true'
-      uses: ../../appservice-ensure-running
-      with:
-        resource-group: ${{ inputs.resource-group }}
-        app-name: ${{ inputs.app-name }}
-        slot: staging
+      shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        APP: ${{ inputs.app-name }}
+        SLOT: staging
+      run: bash "${{ github.action_path }}/ensure-running.sh"
 
     - name: Deploy package (staging slot)
       if: inputs.use-slot == 'true' && inputs.skip-deploy != 'true'
@@ -69,10 +70,11 @@ runs:
 
     - name: Ensure production app is started (no slots)
       if: inputs.use-slot != 'true'
-      uses: ../../appservice-ensure-running
-      with:
-        resource-group: ${{ inputs.resource-group }}
-        app-name: ${{ inputs.app-name }}
+      shell: bash
+      env:
+        RG: ${{ inputs.resource-group }}
+        APP: ${{ inputs.app-name }}
+      run: bash "${{ github.action_path }}/ensure-running.sh"
 
     - name: Warm up staging
       if: inputs.use-slot == 'true' && inputs.warmup-url-staging != ''
