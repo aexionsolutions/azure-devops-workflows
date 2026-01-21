@@ -94,12 +94,17 @@ runs:
           "/d:sonar.projectBaseDir=${PBDIR}"
           "/d:sonar.scanner.scanAll=true"
           "/d:sonar.sources=."
-          "/d:sonar.exclusions=${FULL_EXCLUSIONS}"
-          "/d:sonar.coverage.exclusions=${SONAR_COVERAGE_EXCLUSIONS}"
           "/d:sonar.cpd.exclusions=**/Migrations/**/*.cs,**/*.Designer.cs,**/*.generated.cs,**/*ModelSnapshot.cs"
           "/d:sonar.test.inclusions=**/*.Tests/**,**/*Tests.cs,**/*.spec.ts,**/*.test.ts,**/*.spec.tsx,**/*.test.tsx"
           "/d:sonar.cs.vstest.reportsPaths=**/TestResults/**/*.trx"
         )
+        # Only add exclusions if they have values
+        if [ -n "$FULL_EXCLUSIONS" ]; then
+          ARGS+=("/d:sonar.exclusions=${FULL_EXCLUSIONS}")
+        fi
+        if [ -n "$SONAR_COVERAGE_EXCLUSIONS" ]; then
+          ARGS+=("/d:sonar.coverage.exclusions=${SONAR_COVERAGE_EXCLUSIONS}")
+        fi
         # JS/TS coverage (lcov) for web
         if [ -n "$JS_LCOV" ]; then
           ARGS+=("/d:sonar.javascript.lcov.reportPaths=${JS_LCOV}")
