@@ -82,7 +82,11 @@ runs:
         # Build exclusions dynamically
         FULL_EXCLUSIONS="${SONAR_EXCLUSIONS}"
         if [ -n "$SONAR_INFRA_EXCLUSIONS" ]; then
-          FULL_EXCLUSIONS="${FULL_EXCLUSIONS},${SONAR_INFRA_EXCLUSIONS}"
+          if [ -n "$FULL_EXCLUSIONS" ]; then
+            FULL_EXCLUSIONS="${FULL_EXCLUSIONS},${SONAR_INFRA_EXCLUSIONS}"
+          else
+            FULL_EXCLUSIONS="${SONAR_INFRA_EXCLUSIONS}"
+          fi
         fi
         
         ARGS=(
