@@ -69,6 +69,11 @@ on:
         required: false
         type: string
         default: 'postgres'
+      database_port:
+        description: 'PostgreSQL port (must not conflict with other tests)'
+        required: false
+        type: number
+        default: 5432
       api_port:
         description: 'Port for API server (must not conflict with other tests)'
         required: false
@@ -161,7 +166,7 @@ jobs:
           POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ inputs.postgres_db }}
         ports:
-          - 5432:5432
+          - ${{ inputs.database_port || 5432 }}:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -217,16 +222,19 @@ jobs:
           
           if [ "$PRESET" = "tems" ]; then
             echo "ℹ️  Applying TEMS preset configuration"
+            echo "database_port=5434" >> $GITHUB_OUTPUT
             echo "api_port=5000" >> $GITHUB_OUTPUT
             echo "web_port=3000" >> $GITHUB_OUTPUT
             echo "postgres_db=Tems_test" >> $GITHUB_OUTPUT
           elif [ "$PRESET" = "ravenxpress" ]; then
             echo "ℹ️  Applying RavenXpress preset configuration"
+            echo "database_port=5432" >> $GITHUB_OUTPUT
             echo "api_port=5100" >> $GITHUB_OUTPUT
             echo "web_port=3100" >> $GITHUB_OUTPUT
             echo "postgres_db=e2e_test" >> $GITHUB_OUTPUT
           else
             # Use explicit inputs or defaults
+            echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
             echo "api_port=${{ inputs.api_port }}" >> $GITHUB_OUTPUT
             echo "web_port=${{ inputs.web_port }}" >> $GITHUB_OUTPUT
             echo "postgres_db=${{ inputs.postgres_db }}" >> $GITHUB_OUTPUT
@@ -259,9 +267,9 @@ jobs:
         env:
           PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
         run: |
-          echo "⏳ Waiting for PostgreSQL service..."
+          echo "⏳ Waiting for PostgreSQL service on port ${{ steps.config.outputs.database_port }}..."
           for i in {1..20}; do
-            if pg_isready -h localhost -p 5432 -U ${{ inputs.postgres_user }}; then
+            if pg_isready -h localhost -p ${{ steps.config.outputs.database_port }} -U ${{ inputs.postgres_user }}; then
               echo "✅ PostgreSQL ready"
               exit 0
             fi
@@ -288,8 +296,8 @@ jobs:
           ASPNETCORE_URLS: http://0.0.0.0:${{ steps.config.outputs.api_port }}
           SkipDatabaseMigrations: "false"
           ENABLE_TEST_MIGRATIONS: "true"
-          ConnectionStrings__Postgres: "Host=localhost;Port=5432;Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Default: "Host=localhost;Port=5432;Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
           E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
           E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
           E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
@@ -348,7 +356,7 @@ jobs:
           
           # Verify critical tables exist
           for i in {1..15}; do
-            TABLE_COUNT=$(PGPASSWORD=${{ env.POSTGRES_PASSWORD }} psql -h localhost -p 5432 \
+            TABLE_COUNT=$(PGPASSWORD=${{ env.POSTGRES_PASSWORD }} psql -h localhost -p ${{ steps.config.outputs.database_port }} \
               -U ${{ inputs.postgres_user }} -d ${{ steps.config.outputs.postgres_db }} -t \
               -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>&1 | tr -d ' ')
             
@@ -372,7 +380,7 @@ jobs:
             exit 1
           fi
           
-          psql -h localhost -p 5432 \
+          psql -h localhost -p ${{ steps.config.outputs.database_port }} \
             -U ${{ inputs.postgres_user }} \
             -d ${{ steps.config.outputs.postgres_db }} \
             -f "${{ inputs.seed_data_script }}"
@@ -478,7 +486,7 @@ jobs:
           RUN_E2E: "true"
           E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
-          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=5432;Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
           E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
           E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
           E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
