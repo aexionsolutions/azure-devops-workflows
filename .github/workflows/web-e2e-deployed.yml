@@ -280,19 +280,24 @@ jobs:
       
       # Upload Playwright artifacts
       - name: Upload Playwright report
-        if: always() && inputs.run_playwright_tests && inputs.web_directory != ''
+        if: always() && inputs.run_playwright_tests
         uses: actions/upload-artifact@v4
         with:
           name: playwright-deployed-e2e-${{ github.run_number }}
-          path: ${{ inputs.web_directory }}/playwright-report/
+          path: |
+            **/playwright-report/**
+          if-no-files-found: ignore
           retention-days: 7
       
       - name: Upload Playwright screenshots
-        if: failure() && inputs.run_playwright_tests && inputs.web_directory != ''
+        if: failure() && inputs.run_playwright_tests
         uses: actions/upload-artifact@v4
         with:
           name: playwright-screenshots-deployed-${{ github.run_number }}
-          path: ${{ inputs.web_directory }}/test-results/
+          path: |
+            **/test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
           retention-days: 7
       
       # Upload Reqnroll artifacts
@@ -309,7 +314,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: reqnroll-screenshots-deployed-${{ github.run_number }}
-          path: ${{ inputs.web_directory }}/e2e-screenshots/
+          path: |
+            **/Screenshots/**
+            **/screenshots/**
+            **/e2e-screenshots/**
+          if-no-files-found: ignore
           retention-days: 7
       
       - name: Upload Reqnroll videos
@@ -317,7 +326,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: reqnroll-videos-deployed-${{ github.run_number }}
-          path: ${{ inputs.web_directory }}/e2e-videos/
+          path: |
+            **/videos/**
+            **/Videos/**
+            **/e2e-videos/**
+          if-no-files-found: ignore
           retention-days: 3
       
       # Test Summary
