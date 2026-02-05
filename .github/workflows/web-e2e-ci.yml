@@ -299,8 +299,8 @@ jobs:
         run: |
           echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
           
-          # Find API binary
-          API_BINARY=$(find api-publish -maxdepth 1 -type f -executable -name "*.Api" -o -name "*.Api.exe" | head -n1)
+          # Find API binary (don't require it to be executable yet)
+          API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
           if [ -z "$API_BINARY" ]; then
             echo "❌ API executable not found in api-publish/"
             ls -la api-publish/
