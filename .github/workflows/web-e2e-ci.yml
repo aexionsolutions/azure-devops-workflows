@@ -174,11 +174,6 @@ jobs:
           - 10000:10000
           - 10001:10001
           - 10002:10002
-        options: >-
-          --health-cmd "timeout 1 bash -c ':> /dev/tcp/127.0.0.1/10000' || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     
     defaults:
       run:
@@ -591,6 +586,7 @@ jobs:
 
       - name: Capture diagnostic logs on failure
         if: failure()
+        working-directory: .
         run: |
           echo "📋 Capturing diagnostic information..."
           echo ""
@@ -619,11 +615,11 @@ jobs:
           
           # Show logs
           echo "=== API Logs (last 100 lines) ==="
-          tail -n 100 api.log 2>/dev/null || echo "No API logs found"
+          tail -n 100 caller/api.log 2>/dev/null || echo "No API logs found"
           echo ""
           
           echo "=== Web Logs (last 100 lines) ==="
-          tail -n 100 web.log 2>/dev/null || echo "No web logs found"
+          tail -n 100 caller/web.log 2>/dev/null || echo "No web logs found"
 
       - name: Cleanup background processes
         if: always()
@@ -689,6 +685,7 @@ jobs:
 
       - name: Generate test summary
         if: always()
+        working-directory: .
         run: |
           echo "## 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
