@@ -217,10 +217,9 @@ jobs:
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
           
-          filter_arg=""
-          if [ -n "${{ inputs.test_filter }}" ]; then
-            filter_arg="--filter TestCategory=${{ inputs.test_filter }}"
-          fi
+          # Strip @ prefix from Gherkin tags (e.g., @smoke -> smoke)
+          FILTER="${{ inputs.test_filter }}"
+          FILTER="${FILTER#@}"
           
           # Run tests with retry logic
           attempt=1
@@ -229,10 +228,23 @@ jobs:
           while [ $attempt -le $max_attempts ]; do
             echo "🔄 Test attempt $attempt of $max_attempts"
             
-            if dotnet test "${{ inputs.e2e_project }}" \
-              --logger "trx;LogFileName=reqnroll-results-attempt-$attempt.trx" \
-              --results-directory ./TestResults \
-              $filter_arg; then
+            # Run with or without filter (proper quoting to avoid shell expansion issues)
+            if [ -n "$FILTER" ]; then
+              echo "   Filter: Category=$FILTER"
+              dotnet test "${{ inputs.e2e_project }}" \
+                --logger "trx;LogFileName=reqnroll-results-attempt-$attempt.trx" \
+                --results-directory ./TestResults \
+                --filter "Category=$FILTER"
+              TEST_EXIT_CODE=$?
+            else
+              echo "   Filter: none (all tests)"
+              dotnet test "${{ inputs.e2e_project }}" \
+                --logger "trx;LogFileName=reqnroll-results-attempt-$attempt.trx" \
+                --results-directory ./TestResults
+              TEST_EXIT_CODE=$?
+            fi
+            
+            if [ $TEST_EXIT_CODE -eq 0 ]; then
               echo "✅ Tests passed on attempt $attempt"
               exit 0
             fi
