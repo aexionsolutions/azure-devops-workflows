@@ -1,0 +1,351 @@
+name: Reusable E2E Tests (Deployed Environment)
+
+on:
+  workflow_call:
+    inputs:
+      # Git Reference
+      git_ref:
+        description: 'Git ref to checkout (tag, branch, or commit SHA). Use release tag to ensure test version matches deployed code.'
+        required: false
+        type: string
+        default: ''
+      
+      # Test Configuration
+      e2e_project:
+        description: 'Path to Reqnroll/NUnit E2E test project (.csproj). If empty, Reqnroll tests are skipped.'
+        required: false
+        type: string
+        default: ''
+      
+      # Deployed Environment URLs
+      web_url:
+        description: 'Deployed web application URL (e.g., https://tems-dev-web.azurewebsites.net)'
+        required: true
+        type: string
+      
+      api_url:
+        description: 'Deployed API URL (e.g., https://tems-dev-api.azurewebsites.net)'
+        required: true
+        type: string
+      
+      # Test Execution Options
+      test_filter:
+        description: 'Reqnroll test filter (e.g., @smoke, @regression, @critical). Empty = all tests.'
+        required: false
+        type: string
+        default: '@smoke'
+      
+      run_playwright_tests:
+        description: 'Run Playwright tests from web_directory'
+        required: false
+        type: boolean
+        default: true
+      
+      playwright_project:
+        description: 'Playwright project to run (e.g., chromium, firefox). Empty = all projects.'
+        required: false
+        type: string
+        default: ''
+      
+      e2e_retry_attempts:
+        description: 'Number of retry attempts for flaky tests (default: 3 for deployed envs)'
+        required: false
+        type: number
+        default: 3
+      
+      e2e_enable_video:
+        description: 'Enable video recording for tests (increases artifact size)'
+        required: false
+        type: boolean
+        default: false
+      
+      # Infrastructure
+      node_version:
+        description: 'Node.js version for Playwright tests'
+        required: false
+        type: string
+        default: '20'
+      
+      dotnet_version:
+        description: '.NET version for Reqnroll tests'
+        required: false
+        type: string
+        default: '10.0.x'
+      
+      web_directory:
+        description: 'Path to web project directory (required if run_playwright_tests is true)'
+        required: false
+        type: string
+        default: ''
+      
+      # Health Check Configuration
+      health_check_enabled:
+        description: 'Perform health checks before running tests'
+        required: false
+        type: boolean
+        default: true
+      
+      health_check_timeout:
+        description: 'Health check timeout in seconds'
+        required: false
+        type: number
+        default: 300
+      
+      # Authentication
+      api_key:
+        description: 'API key for deployed environment (if required)'
+        required: false
+        type: string
+        default: ''
+    
+    secrets:
+      E2E_AUTH_TOKEN:
+        description: 'Authentication token for deployed environment (if required)'
+        required: false
+      E2E_TEST_USER_EMAIL:
+        description: 'Test user email for authentication tests'
+        required: false
+      E2E_TEST_USER_PASSWORD:
+        description: 'Test user password for authentication tests'
+        required: false
+
+jobs:
+  e2e-deployed:
+    name: E2E Tests (Deployed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+      
+      # Health Checks
+      - name: Health Check - API
+        if: inputs.health_check_enabled
+        run: |
+          echo "🏥 Checking API health: ${{ inputs.api_url }}"
+          
+          timeout=${{ inputs.health_check_timeout }}
+          elapsed=0
+          interval=10
+          
+          while [ $elapsed -lt $timeout ]; do
+            if curl -f -s "${{ inputs.api_url }}/healthz" > /dev/null 2>&1 || \
+               curl -f -s "${{ inputs.api_url }}/health" > /dev/null 2>&1 || \
+               curl -f -s "${{ inputs.api_url }}" > /dev/null 2>&1; then
+              echo "✅ API is healthy"
+              exit 0
+            fi
+            
+            echo "⏳ API not ready yet... waiting (${elapsed}s / ${timeout}s)"
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+          
+          echo "❌ API health check failed after ${timeout}s"
+          exit 1
+      
+      - name: Health Check - Web
+        if: inputs.health_check_enabled
+        run: |
+          echo "🏥 Checking Web health: ${{ inputs.web_url }}"
+          
+          timeout=${{ inputs.health_check_timeout }}
+          elapsed=0
+          interval=10
+          
+          while [ $elapsed -lt $timeout ]; do
+            if curl -f -s "${{ inputs.web_url }}/api/healthz" > /dev/null 2>&1 || \
+               curl -f -s "${{ inputs.web_url }}" > /dev/null 2>&1; then
+              echo "✅ Web is healthy"
+              exit 0
+            fi
+            
+            echo "⏳ Web not ready yet... waiting (${elapsed}s / ${timeout}s)"
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+          
+          echo "❌ Web health check failed after ${timeout}s"
+          exit 1
+      
+      # Setup .NET for Reqnroll tests
+      - name: Setup .NET
+        if: inputs.e2e_project != ''
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      
+      # Setup Node.js for Playwright tests
+      - name: Setup Node.js
+        if: inputs.run_playwright_tests && inputs.web_directory != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.web_directory }}/package-lock.json
+      
+      # Install Playwright dependencies
+      - name: Install Playwright dependencies
+        if: inputs.run_playwright_tests && inputs.web_directory != ''
+        working-directory: ${{ inputs.web_directory }}
+        run: |
+          npm ci
+          npx playwright install --with-deps
+      
+      # Run Reqnroll E2E Tests
+      - name: Run Reqnroll E2E tests
+        if: inputs.e2e_project != ''
+        env:
+          RUN_E2E: true
+          E2E_BASE_URL: ${{ inputs.web_url }}
+          E2E_API_BASE_URL: ${{ inputs.api_url }}
+          E2E_HEADLESS: true
+          E2E_SLOWMO: 0
+          E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video }}
+          E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
+          E2E_TEST_USER_EMAIL: ${{ secrets.E2E_TEST_USER_EMAIL }}
+          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
+          E2E_API_KEY: ${{ inputs.api_key }}
+          E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
+        run: |
+          echo "🧪 Running Reqnroll E2E tests against deployed environment"
+          echo "   Web URL: ${{ inputs.web_url }}"
+          echo "   API URL: ${{ inputs.api_url }}"
+          echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
+          echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
+          
+          filter_arg=""
+          if [ -n "${{ inputs.test_filter }}" ]; then
+            filter_arg="--filter TestCategory=${{ inputs.test_filter }}"
+          fi
+          
+          # Run tests with retry logic
+          attempt=1
+          max_attempts=${{ inputs.e2e_retry_attempts }}
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "🔄 Test attempt $attempt of $max_attempts"
+            
+            if dotnet test "${{ inputs.e2e_project }}" \
+              --logger "trx;LogFileName=reqnroll-results-attempt-$attempt.trx" \
+              --results-directory ./TestResults \
+              $filter_arg; then
+              echo "✅ Tests passed on attempt $attempt"
+              exit 0
+            fi
+            
+            if [ $attempt -lt $max_attempts ]; then
+              echo "⚠️ Tests failed on attempt $attempt, retrying..."
+              sleep 5
+            else
+              echo "❌ Tests failed after $max_attempts attempts"
+              exit 1
+            fi
+            
+            attempt=$((attempt + 1))
+          done
+      
+      # Run Playwright Tests
+      - name: Run Playwright tests
+        if: inputs.run_playwright_tests && inputs.web_directory != ''
+        working-directory: ${{ inputs.web_directory }}
+        env:
+          BASE_URL: ${{ inputs.web_url }}
+          API_BASE_URL: ${{ inputs.api_url }}
+          E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
+          E2E_TEST_USER_EMAIL: ${{ secrets.E2E_TEST_USER_EMAIL }}
+          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
+          E2E_API_KEY: ${{ inputs.api_key }}
+        run: |
+          echo "🎭 Running Playwright tests against deployed environment"
+          echo "   Web URL: ${{ inputs.web_url }}"
+          echo "   API URL: ${{ inputs.api_url }}"
+          echo "   Project: ${{ inputs.playwright_project || 'all projects' }}"
+          echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
+          
+          project_arg=""
+          if [ -n "${{ inputs.playwright_project }}" ]; then
+            project_arg="--project=${{ inputs.playwright_project }}"
+          fi
+          
+          video_arg=""
+          if [ "${{ inputs.e2e_enable_video }}" = "true" ]; then
+            video_arg="--video=on"
+          fi
+          
+          npx playwright test $project_arg $video_arg --retries=${{ inputs.e2e_retry_attempts }}
+      
+      # Upload Playwright artifacts
+      - name: Upload Playwright report
+        if: always() && inputs.run_playwright_tests && inputs.web_directory != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-deployed-e2e-${{ github.run_number }}
+          path: ${{ inputs.web_directory }}/playwright-report/
+          retention-days: 7
+      
+      - name: Upload Playwright screenshots
+        if: failure() && inputs.run_playwright_tests && inputs.web_directory != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots-deployed-${{ github.run_number }}
+          path: ${{ inputs.web_directory }}/test-results/
+          retention-days: 7
+      
+      # Upload Reqnroll artifacts
+      - name: Upload Reqnroll test results
+        if: always() && inputs.e2e_project != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqnroll-results-deployed-${{ github.run_number }}
+          path: TestResults/*.trx
+          retention-days: 7
+      
+      - name: Upload Reqnroll screenshots
+        if: failure() && inputs.e2e_project != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqnroll-screenshots-deployed-${{ github.run_number }}
+          path: ${{ inputs.web_directory }}/e2e-screenshots/
+          retention-days: 7
+      
+      - name: Upload Reqnroll videos
+        if: failure() && inputs.e2e_enable_video && inputs.e2e_project != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqnroll-videos-deployed-${{ github.run_number }}
+          path: ${{ inputs.web_directory }}/e2e-videos/
+          retention-days: 3
+      
+      # Test Summary
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## 🧪 E2E Test Results (Deployed Environment)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌐 Web URL: \`${{ inputs.web_url }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔌 API URL: \`${{ inputs.api_url }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ inputs.e2e_project }}" ]; then
+            echo "**Reqnroll Tests:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Filter: \`${{ inputs.test_filter || 'all tests' }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Retry attempts: \`${{ inputs.e2e_retry_attempts }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ inputs.run_playwright_tests }}" = "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Playwright Tests:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Project: \`${{ inputs.playwright_project || 'all projects' }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Retry attempts: \`${{ inputs.e2e_retry_attempts }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Node.js: \`${{ inputs.node_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- .NET: \`${{ inputs.dotnet_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Video recording: \`${{ inputs.e2e_enable_video }}\`" >> $GITHUB_STEP_SUMMARY
