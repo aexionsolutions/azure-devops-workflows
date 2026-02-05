@@ -5,9 +5,15 @@ This guide explains how to use the shared workflows in your project.
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
-- [Azure Infrastructure Deploy](#azure-infrastructure-deploy)
-- [.NET CI](#net-ci)
-- [Web CI](#web-ci)
+- [CI/CD Workflows](#cicd-workflows)
+  - [.NET CI](#net-ci)
+  - [Web CI](#web-ci)
+  - [Web E2E CI](#web-e2e-ci)
+  - [Web E2E Deployed](#web-e2e-deployed)
+- [Deployment Workflows](#deployment-workflows)
+  - [Azure Infrastructure Deploy](#azure-infrastructure-deploy)
+  - [API Deploy](#api-deploy)
+  - [Web Deploy](#web-deploy)
 - [Best Practices](#best-practices)
 
 ## Prerequisites
@@ -243,7 +249,291 @@ jobs:
 - ✅ Playwright browser installation
 - ✅ Lint, test, and build in one workflow
 - ✅ Artifact uploads (build output, Playwright reports)
-- ✅ Conditional step execution
+
+## Web E2E CI
+
+**Workflow**: `web-e2e-ci.yml`
+
+**Purpose**: End-to-end testing with full stack (API + Web + Database) in Docker.
+
+### Basic Usage
+
+```yaml
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    with:
+      solution: RavenXpress.sln
+      api_project: rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj
+      web_directory: rx-web
+      e2e_project: tests/RavenXpress.E2E/RavenXpress.E2E.csproj
+      run_smoke_only: true  # Fast feedback in PRs
+      test_filter: '@smoke'
+```
+
+### Advanced Usage
+
+```yaml
+jobs:
+  e2e-full:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    with:
+      # Required Configuration
+      solution: RavenXpress.sln
+      api_project: rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj
+      web_directory: rx-web
+      
+      # Optional Test Projects
+      e2e_project: tests/RavenXpress.E2E/RavenXpress.E2E.csproj  # Reqnroll/SpecFlow tests
+      
+      # Test Execution
+      run_smoke_only: false                      # Default: true
+      test_filter: '@regression'                 # Default: '' (all tests)
+      run_playwright_tests: true                 # Default: true
+      e2e_retry_attempts: 2                      # Default: 1 (no retry)
+      e2e_enable_video: true                     # Default: false
+      
+      # Infrastructure
+      node_version: '20'                         # Default: 20
+      postgres_db: e2e_test                      # Default: e2e_test
+      api_port: 5100                             # Default: 5100
+      web_port: 3100                             # Default: 3100
+      enable_azurite: true                       # Default: true
+      
+      # Database Seeding
+      seed_data_script: tests/e2e-seed-data.sql # Default: '' (no seeding)
+    secrets:
+      E2E_JWT_SIGNING_KEY: ${{ secrets.E2E_JWT_SIGNING_KEY }}
+```
+
+### Key Features
+
+- ✅ **Full Stack** - Real API + Web + Database (not mocked)
+- ✅ **Docker Services** - PostgreSQL + Azurite blob storage
+- ✅ **Reqnroll Support** - BDD tests with tag-based filtering
+- ✅ **Playwright Support** - Browser automation tests
+- ✅ **Smoke Mode** - Fast feedback with smoke tests in PRs
+- ✅ **Test Retry** - Configurable retry for flaky tests
+- ✅ **Video Recording** - Optional video capture for debugging
+- ✅ **Custom Seeding** - SQL scripts for test data
+- ✅ **Comprehensive Artifacts** - Screenshots, videos, logs
+
+### Test Filtering
+
+Use Reqnroll tags to organize tests:
+
+```gherkin
+@smoke @critical
+Scenario: User can log in
+  Given I am on the login page
+  When I enter valid credentials
+  Then I should see the dashboard
+
+@regression @orders
+Scenario: User can create an order
+  Given I am logged in
+  When I create a new order
+  Then the order appears in the list
+```
+
+Filter by tag in workflow:
+
+```yaml
+with:
+  test_filter: '@smoke'           # Only smoke tests
+  # OR
+  test_filter: '@regression'      # Only regression tests
+  # OR
+  test_filter: '@smoke or @critical'  # Either tag
+```
+
+### Common Scenarios
+
+**1. PR Smoke Tests (Fast)**
+```yaml
+with:
+  run_smoke_only: true
+  test_filter: '@smoke'
+  # Duration: ~3-5 minutes
+```
+
+**2. Full Regression (Deployment)**
+```yaml
+with:
+  run_smoke_only: false
+  e2e_retry_attempts: 2
+  e2e_enable_video: true
+  # Duration: ~10-20 minutes
+```
+
+**3. Reqnroll Only**
+```yaml
+with:
+  run_playwright_tests: false
+  e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+```
+
+### Documentation
+
+See [web-e2e-ci-guide.md](web-e2e-ci-guide.md) for comprehensive documentation including:
+- Complete configuration reference
+- Reqnroll test filtering strategies
+- Environment variables
+- Database seeding with SQL scripts
+- Troubleshooting common issues
+- Migration from local PowerShell scripts
+
+---
+
+## Web E2E Deployed
+
+**Workflow**: `web-e2e-deployed.yml`
+
+**Purpose**: End-to-end testing against **already-deployed environments** (dev, staging, production). No Docker services - tests your actual Azure infrastructure.
+
+### Basic Usage
+
+```yaml
+name: Deploy to Staging
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  deploy-api:
+    # ... your API deployment
+  
+  deploy-web:
+    needs: deploy-api
+    # ... your web deployment
+  
+  e2e-smoke:
+    name: Post-Deploy E2E
+    needs: [deploy-api, deploy-web]
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.0.1
+    with:
+      e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+      web_url: https://tems-staging-web.azurewebsites.net
+      api_url: https://tems-staging-api.azurewebsites.net
+      web_directory: web/tems-portal
+      test_filter: '@smoke'
+    secrets:
+      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+```
+
+### Advanced Usage
+
+```yaml
+jobs:
+  e2e-regression:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.0.1
+    with:
+      # Required - Deployed Environment URLs
+      web_url: https://tems-staging-web.azurewebsites.net
+      api_url: https://tems-staging-api.azurewebsites.net
+      
+      # Test Projects
+      e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+      web_directory: web/tems-portal
+      
+      # Test Configuration
+      test_filter: '@smoke or @regression'
+      run_playwright_tests: true
+      playwright_project: 'chromium'           # Specific browser
+      e2e_retry_attempts: 3                    # Higher for deployed envs
+      e2e_enable_video: true
+      
+      # Health Checks
+      health_check_enabled: true               # Wait for services
+      health_check_timeout: 600                # 10 minutes
+      
+      # Infrastructure
+      node_version: '20'
+      dotnet_version: '10.0.x'
+      
+      # Authentication (if required)
+      api_key: ${{ secrets.STAGING_API_KEY }}
+    secrets:
+      E2E_AUTH_TOKEN: ${{ secrets.STAGING_AUTH_TOKEN }}
+      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+```
+
+### Key Features
+
+- ✅ **Tests Deployed Azure Resources** - API + Web + Database already running
+- ✅ **No Docker Services** - Uses your actual cloud infrastructure
+- ✅ **Health Checks** - Verifies services are ready before testing
+- ✅ **Higher Retry Logic** - Default 3 retries for deployed environment flakiness
+- ✅ **Test Artifact Support** - Works with pre-built test packages
+- ✅ **Post-Deployment Validation** - Runs after deployment completes
+- ✅ **Production Monitoring** - Can run on schedule for health checks
+
+### When to Use
+
+| Scenario | Use This Workflow? |
+|----------|-------------------|
+| PR validation with Docker services | ❌ Use `web-e2e-ci.yml` |
+| After deploying to dev/staging/prod | ✅ Yes |
+| Smoke tests on deployed environment | ✅ Yes |
+| Release promotion validation | ✅ Yes |
+| Production health checks | ✅ Yes |
+| Scheduled monitoring | ✅ Yes |
+
+### Comparison: CI vs Deployed
+
+| Aspect | web-e2e-ci.yml | web-e2e-deployed.yml |
+|--------|----------------|----------------------|
+| **Services** | Docker (Postgres, Azurite) | Azure (deployed) |
+| **Build** | Builds API + Web from source | No build, uses deployed apps |
+| **Use Case** | PR validation | Post-deployment validation |
+| **Speed** | Slower (builds everything) | Faster (no builds) |
+| **Retry Default** | 1 | 3 |
+| **When to Use** | Before merge | After deployment |
+
+### Scheduled Production Monitoring
+
+```yaml
+name: Production Health Check
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+jobs:
+  prod-health:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.0.1
+    with:
+      e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+      web_url: https://tems-web.azurewebsites.net
+      api_url: https://tems-api.azurewebsites.net
+      web_directory: web/tems-portal
+      test_filter: '@critical'  # Only critical paths
+    secrets:
+      E2E_TEST_USER_EMAIL: ${{ secrets.PROD_E2E_TEST_USER_EMAIL }}
+      E2E_TEST_USER_PASSWORD: ${{ secrets.PROD_E2E_TEST_USER_PASSWORD }}
+```
+
+### Documentation
+
+See [web-e2e-deployed-guide.md](web-e2e-deployed-guide.md) for comprehensive documentation including:
+- Test artifact strategy (packaging tests during release)
+- Health check configuration and custom endpoints
+- Post-deployment validation patterns
+- Production monitoring with scheduled tests
+- Environment-specific secret management
+- Troubleshooting deployed environment issues
+
+---
 
 ## Best Practices
 
