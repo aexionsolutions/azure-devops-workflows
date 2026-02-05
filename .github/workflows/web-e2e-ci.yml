@@ -1,0 +1,745 @@
+name: Reusable Web E2E CI
+
+on:
+  workflow_call:
+    inputs:
+      shared_ref:
+        description: 'Ref (tag/sha/branch) of aexionsolutions/azure-devops-workflows to checkout into ./shared. Set this to the same @ref used in the calling repo. If omitted, defaults to main.'
+        required: false
+        type: string
+        default: ''
+      git_ref:
+        description: 'Git ref (tag/sha/branch) to test. Required for promote-release to ensure tests match the build version.'
+        required: false
+        type: string
+      repo_preset:
+        description: 'Auto-configure ports and database for known repos (tems, ravenxpress). Overrides api_port, web_port, and postgres_db if set.'
+        required: false
+        type: string
+        default: ''
+      solution:
+        description: 'Path to .sln file for building the API (e.g., RavenXpress.sln, Ems.sln)'
+        required: true
+        type: string
+      api_project:
+        description: 'Path to API .csproj file (e.g., rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj)'
+        required: true
+        type: string
+      web_directory:
+        description: 'Path to web project directory (e.g., rx-web, web/tems-portal)'
+        required: true
+        type: string
+      e2e_project:
+        description: 'Path to E2E test .csproj file with Reqnroll/SpecFlow (e.g., tests/RavenXpress.E2E/RavenXpress.E2E.csproj). Leave empty to skip Reqnroll tests.'
+        required: false
+        type: string
+        default: ''
+      node_version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+      run_smoke_only:
+        description: 'Run only smoke tests (faster for PR), or all tests'
+        required: false
+        type: boolean
+        default: true
+      test_filter:
+        description: 'Test filter for Reqnroll tests (e.g., @smoke, @regression, @critical). Ignored if run_smoke_only is true.'
+        required: false
+        type: string
+        default: ''
+      e2e_retry_attempts:
+        description: 'Total attempts for E2E tests (1 disables retries, useful for flaky tests)'
+        required: false
+        type: number
+        default: 1
+      e2e_enable_video:
+        description: 'Capture E2E Playwright video recordings (increases artifact size)'
+        required: false
+        type: boolean
+        default: false
+      postgres_db:
+        description: 'PostgreSQL database name'
+        required: false
+        type: string
+        default: 'e2e_test'
+      postgres_user:
+        description: 'PostgreSQL username'
+        required: false
+        type: string
+        default: 'postgres'
+      api_port:
+        description: 'Port for API server (must not conflict with other tests)'
+        required: false
+        type: number
+        default: 5100
+      web_port:
+        description: 'Port for web server (must not conflict with other tests)'
+        required: false
+        type: number
+        default: 3100
+      enable_azurite:
+        description: 'Enable Azurite blob storage emulator (required if API uses Azure Blob Storage)'
+        required: false
+        type: boolean
+        default: true
+      seed_data_script:
+        description: 'Path to SQL file with seed data (relative to repo root). Leave empty to skip seeding.'
+        required: false
+        type: string
+        default: ''
+      run_playwright_tests:
+        description: 'Run Playwright tests from web_directory (in addition to Reqnroll tests)'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      E2E_JWT_SIGNING_KEY:
+        description: 'JWT signing key for E2E authentication (generated if not provided)'
+        required: false
+      E2E_JWT_AUDIENCE:
+        description: 'JWT audience for E2E tests (defaults to e2e-api if not provided)'
+        required: false
+
+env:
+  CALLER_WORKDIR: caller
+  POSTGRES_PASSWORD: test_password_e2e_123
+
+jobs:
+  # Build API once, reuse in E2E job
+  build-api:
+    name: Build API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore solution
+        run: dotnet restore ${{ inputs.solution }}
+
+      - name: Build API project
+        run: |
+          dotnet build ${{ inputs.api_project }} \
+            -c Release \
+            --no-restore \
+            --nologo
+
+      - name: Publish API
+        run: |
+          dotnet publish ${{ inputs.api_project }} \
+            -c Release \
+            -o ./api-publish \
+            --no-build \
+            --nologo
+
+      - name: Upload API artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-e2e-${{ github.run_id }}
+          path: ./api-publish
+          retention-days: 1
+
+  # E2E tests with full stack (API + Web + DB + Azurite)
+  web-e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: build-api
+    
+    # Docker services for E2E environment
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ${{ inputs.postgres_user }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:latest
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+        options: >-
+          --health-cmd "timeout 1 bash -c ':> /dev/tcp/127.0.0.1/10000' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    defaults:
+      run:
+        working-directory: caller
+    
+    steps:
+      - name: Checkout shared workflows
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ inputs.shared_ref || 'main' }}
+          path: shared
+
+      - name: Checkout calling repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Setup .NET (for running API and E2E tests)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download API artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: api-e2e-${{ github.run_id }}
+          path: caller/api-publish
+
+      - name: Apply repository preset configuration
+        id: config
+        run: |
+          # Apply repo-specific presets if provided
+          PRESET="${{ inputs.repo_preset }}"
+          
+          if [ "$PRESET" = "tems" ]; then
+            echo "ℹ️  Applying TEMS preset configuration"
+            echo "api_port=5000" >> $GITHUB_OUTPUT
+            echo "web_port=3000" >> $GITHUB_OUTPUT
+            echo "postgres_db=Tems_test" >> $GITHUB_OUTPUT
+          elif [ "$PRESET" = "ravenxpress" ]; then
+            echo "ℹ️  Applying RavenXpress preset configuration"
+            echo "api_port=5100" >> $GITHUB_OUTPUT
+            echo "web_port=3100" >> $GITHUB_OUTPUT
+            echo "postgres_db=e2e_test" >> $GITHUB_OUTPUT
+          else
+            # Use explicit inputs or defaults
+            echo "api_port=${{ inputs.api_port }}" >> $GITHUB_OUTPUT
+            echo "web_port=${{ inputs.web_port }}" >> $GITHUB_OUTPUT
+            echo "postgres_db=${{ inputs.postgres_db }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare E2E JWT configuration
+        id: jwt
+        run: |
+          # Use secrets if provided, otherwise generate ephemeral values
+          KEY="${{ secrets.E2E_JWT_SIGNING_KEY }}"
+          if [ -z "$KEY" ]; then
+            KEY=$(openssl rand -base64 48 | tr -d '\n')
+            echo "ℹ️  Generated ephemeral E2E_JWT_SIGNING_KEY for this run"
+          else
+            echo "ℹ️  Using E2E_JWT_SIGNING_KEY from repository secrets"
+          fi
+          echo "signing_key=$KEY" >> $GITHUB_OUTPUT
+          
+          ISSUER="https://e2e-auth-issuer"
+          echo "issuer=$ISSUER" >> $GITHUB_OUTPUT
+          
+          AUD="${{ secrets.E2E_JWT_AUDIENCE }}"
+          if [ -z "$AUD" ]; then
+            AUD="e2e-api"
+            echo "ℹ️  Using default E2E_JWT_AUDIENCE: $AUD"
+          fi
+          echo "audience=$AUD" >> $GITHUB_OUTPUT
+
+      - name: Wait for PostgreSQL
+        env:
+          PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        run: |
+          echo "⏳ Waiting for PostgreSQL service..."
+          for i in {1..20}; do
+            if pg_isready -h localhost -p 5432 -U ${{ inputs.postgres_user }}; then
+              echo "✅ PostgreSQL ready"
+              exit 0
+            fi
+            [ $i -eq 20 ] && echo "❌ PostgreSQL failed to start" && exit 1
+            sleep 2
+          done
+
+      - name: Wait for Azurite (if enabled)
+        if: inputs.enable_azurite == true
+        run: |
+          echo "⏳ Waiting for Azurite service..."
+          for i in {1..15}; do
+            if curl -sf http://127.0.0.1:10000/devstoreaccount1?restype=service&comp=properties >/dev/null 2>&1; then
+              echo "✅ Azurite ready on ports 10000-10002"
+              exit 0
+            fi
+            [ $i -eq 15 ] && echo "❌ Azurite failed to start" && exit 1
+            sleep 1
+          done
+
+      - name: Start API server
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://0.0.0.0:${{ steps.config.outputs.api_port }}
+          SkipDatabaseMigrations: "false"
+          ENABLE_TEST_MIGRATIONS: "true"
+          ConnectionStrings__Postgres: "Host=localhost;Port=5432;Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Default: "Host=localhost;Port=5432;Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+          E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+          E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+          Auth__Issuer: ${{ steps.jwt.outputs.issuer }}
+          Auth__Audience: ${{ steps.jwt.outputs.audience }}
+          AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+        run: |
+          echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
+          
+          # Find API binary
+          API_BINARY=$(find api-publish -maxdepth 1 -type f -executable -name "*.Api" -o -name "*.Api.exe" | head -n1)
+          if [ -z "$API_BINARY" ]; then
+            echo "❌ API executable not found in api-publish/"
+            ls -la api-publish/
+            exit 1
+          fi
+          chmod +x "$API_BINARY"
+          
+          # Remove appsettings files to prevent connection string conflicts
+          rm -f api-publish/appsettings.*.json
+          echo "ℹ️  Removed appsettings files - using environment variables only"
+          
+          # Start API in background
+          cd api-publish
+          ./${API_BINARY##*/} > ../api.log 2>&1 &
+          API_PID=$!
+          cd ..
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+          echo "ℹ️  API process started (PID: $API_PID)"
+          
+          # Wait for API health endpoint
+          echo "⏳ Waiting for API to be ready..."
+          for i in {1..60}; do
+            if curl -sf http://localhost:${{ steps.config.outputs.api_port }}/healthz >/dev/null 2>&1 || \
+               curl -sf http://localhost:${{ steps.config.outputs.api_port }}/health >/dev/null 2>&1; then
+              echo "✅ API ready on http://localhost:${{ steps.config.outputs.api_port }}"
+              exit 0
+            fi
+            
+            # Check if process is still alive
+            if ! kill -0 $API_PID 2>/dev/null; then
+              echo "❌ API process died during startup"
+              echo "--- API logs (last 50 lines) ---"
+              tail -n 50 api.log || true
+              exit 1
+            fi
+            
+            [ $i -eq 60 ] && echo "❌ API failed to respond after 60 seconds" && tail -n 50 api.log && exit 1
+            sleep 1
+          done
+
+      - name: Wait for migrations to complete
+        run: |
+          echo "⏳ Waiting for EF migrations to complete..."
+          sleep 5
+          
+          # Verify critical tables exist
+          for i in {1..15}; do
+            TABLE_COUNT=$(PGPASSWORD=${{ env.POSTGRES_PASSWORD }} psql -h localhost -p 5432 \
+              -U ${{ inputs.postgres_user }} -d ${{ steps.config.outputs.postgres_db }} -t \
+              -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>&1 | tr -d ' ')
+            
+            if [ "$TABLE_COUNT" -gt 0 ]; then
+              echo "✅ Database schema initialized ($TABLE_COUNT tables found)"
+              exit 0
+            fi
+            
+            [ $i -eq 15 ] && echo "❌ No tables found after 15 seconds" && exit 1
+            sleep 1
+          done
+
+      - name: Seed test data
+        if: inputs.seed_data_script != ''
+        env:
+          PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        run: |
+          echo "📦 Seeding test data from ${{ inputs.seed_data_script }}..."
+          if [ ! -f "${{ inputs.seed_data_script }}" ]; then
+            echo "❌ Seed data script not found: ${{ inputs.seed_data_script }}"
+            exit 1
+          fi
+          
+          psql -h localhost -p 5432 \
+            -U ${{ inputs.postgres_user }} \
+            -d ${{ steps.config.outputs.postgres_db }} \
+            -f "${{ inputs.seed_data_script }}"
+          
+          echo "✅ Test data seeded successfully"
+
+      - name: Install web dependencies
+        working-directory: caller/${{ inputs.web_directory }}
+        run: |
+          echo "📦 Installing web dependencies..."
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Install Playwright browsers
+        if: inputs.run_playwright_tests == true
+        working-directory: caller/${{ inputs.web_directory }}
+        run: |
+          echo "📦 Installing Playwright browsers..."
+          npx playwright install --with-deps chromium
+
+      - name: Build Next.js app
+        working-directory: caller/${{ inputs.web_directory }}
+        env:
+          API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+          NEXT_PUBLIC_API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+          NEXT_PUBLIC_TEST_MOCK_MSAL: "true"
+          NEXT_PUBLIC_E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+          NEXT_PUBLIC_E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+          NEXT_PUBLIC_E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+          NEXT_PUBLIC_VERSION: e2e-test
+          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
+        run: |
+          echo "🏗️  Building Next.js app..."
+          npm run build
+
+      - name: Start Next.js server
+        working-directory: caller/${{ inputs.web_directory }}
+        env:
+          API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+          NEXT_PUBLIC_API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+          NEXT_PUBLIC_TEST_MOCK_MSAL: "true"
+          NEXT_PUBLIC_E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+          NEXT_PUBLIC_E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+          NEXT_PUBLIC_E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+          NODE_ENV: production
+          PORT: ${{ steps.config.outputs.web_port }}
+        run: |
+          echo "🚀 Starting Next.js server on port ${{ steps.config.outputs.web_port }}..."
+          npm run start > ../web.log 2>&1 &
+          WEB_PID=$!
+          echo "WEB_PID=$WEB_PID" >> $GITHUB_ENV
+          echo "ℹ️  Next.js process started (PID: $WEB_PID)"
+          
+          # Wait for web server readiness
+          echo "⏳ Waiting for Next.js to be ready..."
+          for i in {1..60}; do
+            if curl -sf http://localhost:${{ steps.config.outputs.web_port }}/healthz >/dev/null 2>&1 || \
+               curl -sf http://localhost:${{ steps.config.outputs.web_port }} >/dev/null 2>&1; then
+              echo "✅ Next.js ready on http://localhost:${{ steps.config.outputs.web_port }}"
+              exit 0
+            fi
+            
+            # Check if process is still alive
+            if ! kill -0 $WEB_PID 2>/dev/null; then
+              echo "❌ Next.js process died during startup"
+              echo "--- Web logs (last 50 lines) ---"
+              tail -n 50 ../web.log || true
+              exit 1
+            fi
+            
+            [ $i -eq 60 ] && echo "❌ Next.js failed to respond after 60 seconds" && tail -n 50 ../web.log && exit 1
+            sleep 1
+          done
+
+      - name: Verify services health
+        run: |
+          echo "🔍 Verifying all services are healthy..."
+          
+          # API health check
+          API_HEALTH=$(curl -sf http://localhost:${{ steps.config.outputs.api_port }}/healthz || curl -sf http://localhost:${{ steps.config.outputs.api_port }}/health || echo "failed")
+          if [[ "$API_HEALTH" == *"Healthy"* ]] || [[ "$API_HEALTH" == *"healthy"* ]] || [[ "$API_HEALTH" != "failed" ]]; then
+            echo "✅ API is healthy"
+          else
+            echo "❌ API health check failed: $API_HEALTH"
+            exit 1
+          fi
+          
+          # Web health check
+          WEB_HEALTH=$(curl -sf http://localhost:${{ steps.config.outputs.web_port }}/healthz || curl -sf http://localhost:${{ steps.config.outputs.web_port }} || echo "failed")
+          if [[ "$WEB_HEALTH" != "failed" ]]; then
+            echo "✅ Web is healthy"
+          else
+            echo "❌ Web health check failed"
+            exit 1
+          fi
+
+      - name: Run Reqnroll E2E tests
+        if: inputs.e2e_project != ''
+        env:
+          RUN_E2E: "true"
+          E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
+          E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
+          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=5432;Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+          E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+          E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+          E2E_HEADLESS: "true"
+          E2E_SLOWMO: "0"
+          E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video && 'true' || 'false' }}
+        run: |
+          echo "🧪 Running Reqnroll/SpecFlow E2E tests..."
+          echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
+          
+          # Determine test filter
+          if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
+            FILTER="@smoke"
+            echo "ℹ️  Running smoke tests only (filter: @smoke)"
+          elif [ -n "${{ inputs.test_filter }}" ]; then
+            FILTER="${{ inputs.test_filter }}"
+            echo "ℹ️  Running tests with filter: $FILTER"
+          else
+            FILTER=""
+            echo "ℹ️  Running all E2E tests (no filter)"
+          fi
+          
+          # Build test project first to generate Playwright install script
+          echo "🏗️  Building E2E test project..."
+          dotnet build ${{ inputs.e2e_project }} -c Release --nologo
+          
+          # Install Playwright browsers for .NET (if using Microsoft.Playwright)
+          PLAYWRIGHT_SCRIPT=$(find . -path "*/bin/Release/*/playwright.ps1" | head -n1)
+          if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
+            echo "📦 Installing Playwright browsers for .NET..."
+            pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
+          fi
+          
+          # Run tests with retry logic
+          TOTAL_ATTEMPTS=${{ inputs.e2e_retry_attempts }}
+          if [ -z "$TOTAL_ATTEMPTS" ] || [ "$TOTAL_ATTEMPTS" -lt 1 ]; then
+            TOTAL_ATTEMPTS=1
+          fi
+          
+          ATTEMPT=1
+          FINAL_EXIT_CODE=1
+          
+          echo "ℹ️  Test retry configuration: max $TOTAL_ATTEMPTS attempt(s)"
+          
+          while [ $ATTEMPT -le $TOTAL_ATTEMPTS ]; do
+            echo ""
+            echo "🔄 Test attempt $ATTEMPT of $TOTAL_ATTEMPTS..."
+            
+            # Build dotnet test command
+            TEST_CMD="dotnet test ${{ inputs.e2e_project }} -c Release --no-build --logger trx;LogFileName=e2e-attempt-${ATTEMPT}.trx --logger console;verbosity=normal"
+            
+            # Add filter if specified
+            if [ -n "$FILTER" ]; then
+              TEST_CMD="$TEST_CMD --filter TestCategory=$FILTER"
+            fi
+            
+            # Run tests (continue on failure to allow retry)
+            set +e
+            eval $TEST_CMD
+            EXIT_CODE=$?
+            set -e
+            
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "✅ Reqnroll E2E tests passed on attempt $ATTEMPT"
+              FINAL_EXIT_CODE=0
+              break
+            else
+              echo "⚠️  Reqnroll E2E tests failed on attempt $ATTEMPT (exit code: $EXIT_CODE)"
+              FINAL_EXIT_CODE=$EXIT_CODE
+              
+              if [ $ATTEMPT -lt $TOTAL_ATTEMPTS ]; then
+                echo "🔄 Retrying in 5 seconds..."
+                sleep 5
+              else
+                echo "❌ All $TOTAL_ATTEMPTS attempts failed"
+              fi
+            fi
+            
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+          
+          exit $FINAL_EXIT_CODE
+
+      - name: Run Playwright tests
+        if: inputs.run_playwright_tests == true
+        working-directory: caller/${{ inputs.web_directory }}
+        env:
+          BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
+          START_WEB_SERVER: "false"
+        run: |
+          echo "🧪 Running Playwright tests..."
+          
+          if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
+            echo "ℹ️  Running smoke tests only..."
+            if [ -f "smoke.spec.ts" ] || [ -f "tests/smoke.spec.ts" ] || [ -f "e2e/smoke.spec.ts" ]; then
+              npx playwright test smoke.spec.ts --reporter=list
+            else
+              echo "⚠️  No smoke.spec.ts found, running tests with @smoke tag..."
+              npx playwright test --grep @smoke --reporter=list
+            fi
+          else
+            echo "ℹ️  Running all Playwright tests..."
+            npx playwright test --reporter=list
+          fi
+
+      - name: Capture diagnostic logs on failure
+        if: failure()
+        run: |
+          echo "📋 Capturing diagnostic information..."
+          echo ""
+          
+          # Check process status
+          echo "=== Process Status ==="
+          if kill -0 $API_PID 2>/dev/null; then
+            echo "✅ API process still running (PID: $API_PID)"
+          else
+            echo "❌ API process died (PID: $API_PID)"
+          fi
+          
+          if kill -0 $WEB_PID 2>/dev/null; then
+            echo "✅ Web process still running (PID: $WEB_PID)"
+          else
+            echo "❌ Web process died (PID: $WEB_PID)"
+          fi
+          echo ""
+          
+          # Test endpoints
+          echo "=== Endpoint Tests ==="
+          curl -v http://localhost:${{ steps.config.outputs.api_port }}/healthz 2>&1 || echo "API health endpoint failed"
+          echo ""
+          curl -v http://localhost:${{ steps.config.outputs.web_port }}/healthz 2>&1 || echo "Web health endpoint failed"
+          echo ""
+          
+          # Show logs
+          echo "=== API Logs (last 100 lines) ==="
+          tail -n 100 api.log 2>/dev/null || echo "No API logs found"
+          echo ""
+          
+          echo "=== Web Logs (last 100 lines) ==="
+          tail -n 100 web.log 2>/dev/null || echo "No web logs found"
+
+      - name: Cleanup background processes
+        if: always()
+        run: |
+          echo "🧹 Cleaning up background processes..."
+          kill $WEB_PID 2>/dev/null || true
+          kill $API_PID 2>/dev/null || true
+          sleep 2
+
+      - name: Upload Playwright artifacts
+        if: always() && inputs.run_playwright_tests == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-${{ github.run_number }}
+          path: |
+            caller/${{ inputs.web_directory }}/playwright-report/**
+            caller/${{ inputs.web_directory }}/test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Reqnroll screenshots
+        if: always() && inputs.e2e_project != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqnroll-screenshots-${{ github.run_number }}
+          path: |
+            caller/**/Screenshot/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Reqnroll videos
+        if: always() && inputs.e2e_project != '' && inputs.e2e_enable_video == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqnroll-videos-${{ github.run_number }}
+          path: |
+            caller/**/videos/**
+            caller/**/Videos/**
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload Reqnroll test results
+        if: always() && inputs.e2e_project != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqnroll-results-${{ github.run_number }}
+          path: |
+            caller/**/TestResults/**
+            caller/**/e2e-attempt-*.trx
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostic-logs-${{ github.run_number }}
+          path: |
+            caller/api.log
+            caller/web.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Preset: ${{ inputs.repo_preset || 'none (using explicit inputs)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- API: http://localhost:${{ steps.config.outputs.api_port }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Web: http://localhost:${{ steps.config.outputs.web_port }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Mode: ${{ inputs.run_smoke_only && 'Smoke tests only' || 'Full test suite' }}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.test_filter }}" ]; then
+            echo "- Filter: \`${{ inputs.test_filter }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for retry attempts
+          ATTEMPT_COUNT=$(find caller -name "e2e-attempt-*.trx" 2>/dev/null | wc -l || echo 0)
+          if [ "$ATTEMPT_COUNT" -gt 1 ]; then
+            echo "🔄 **Test Retry Information**: $ATTEMPT_COUNT attempt(s) executed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Count artifacts
+          if [ "${{ inputs.run_playwright_tests }}" = "true" ]; then
+            PLAYWRIGHT_FAILURES=$(find caller/${{ inputs.web_directory }}/test-results -name "*.png" 2>/dev/null | wc -l || echo 0)
+            if [ "$PLAYWRIGHT_FAILURES" -gt 0 ]; then
+              echo "⚠️ **Playwright**: $PLAYWRIGHT_FAILURES failure screenshot(s)" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          if [ -n "${{ inputs.e2e_project }}" ]; then
+            REQNROLL_SCREENSHOTS=$(find caller -path "*/Screenshot/*.png" 2>/dev/null | wc -l || echo 0)
+            if [ "$REQNROLL_SCREENSHOTS" -gt 0 ]; then
+              echo "⚠️ **Reqnroll**: $REQNROLL_SCREENSHOTS failure screenshot(s)" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            if [ "${{ inputs.e2e_enable_video }}" = "true" ]; then
+              VIDEO_COUNT=$(find caller -path "*/videos/*.webm" 2>/dev/null | wc -l || echo 0)
+              if [ "$VIDEO_COUNT" -gt 0 ]; then
+                echo "📹 **Videos**: $VIDEO_COUNT recording(s) captured" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.run_playwright_tests }}" = "true" ]; then
+            echo "- \`playwright-e2e-${{ github.run_number }}\` - Playwright reports and screenshots" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -n "${{ inputs.e2e_project }}" ]; then
+            echo "- \`reqnroll-screenshots-${{ github.run_number }}\` - Reqnroll failure screenshots" >> $GITHUB_STEP_SUMMARY
+            echo "- \`reqnroll-results-${{ github.run_number }}\` - Reqnroll test result files" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ inputs.e2e_enable_video }}" = "true" ]; then
+              echo "- \`reqnroll-videos-${{ github.run_number }}\` - Reqnroll video recordings" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
