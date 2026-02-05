@@ -16,18 +16,18 @@ Use `repo_preset: 'tems'` to auto-configure most settings:
 
 ```yaml
 with:
-  repo_preset: 'tems'              # ✅ Auto-configures ports 5000/3000, database 'Tems_test'
-  database_port: 5434              # ⚠️ REQUIRED: Must be set explicitly (GitHub Actions limitation)
-  postgres_user: 'tems_e2e'        # ⚠️ REQUIRED: TEMS uses custom username
-  postgres_password: 'tems_e2e_pw' # ⚠️ REQUIRED: Must match what TEMS test code expects
+  repo_preset: 'tems'                # ✅ Auto-configures api_port=5000, web_port=3000
+  # ⚠️ Database settings must match what TEMS test code (DatabaseHelper.cs) uses:
+  database_port: 5434                # REQUIRED (GH Actions limitation)
+  postgres_db: 'tems_e2e'            # REQUIRED (test code uses this, not 'Tems_test')
+  postgres_user: 'tems_e2e'          # REQUIRED (test code uses this, not 'postgres')
+  postgres_password: 'TemsE2e123!'   # REQUIRED (must match test code)
 ```
 
 This automatically sets:
 - API Port: `5000` (instead of default 5100)
-- Web Port: `3000` (instead of default 3100)  
-- Database: `Tems_test` (instead of default e2e_test)
-- **Database Port: Must be set to `5434` explicitly** (preset can't control service ports)
-- **Username/Password: Must match what your test code uses** (TEMS uses `tems_e2e`/`tems_e2e_pw`)
+- Web Port: `3000` (instead of default 3100)
+- **Database settings: Must all match what your `DatabaseHelper.cs` hardcodes**
 
 ### Settings Reference
 
@@ -95,11 +95,13 @@ jobs:
       web_directory: web/tems-portal
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
       
-      # TEMS preset (auto-configures ports 5000/3000 and database Tems_test)
+      # TEMS preset (auto-configures api_port=5000, web_port=3000)
       repo_preset: 'tems'
-      database_port: 5434            # ⚠️ REQUIRED: Preset can't control service ports
-      postgres_user: 'tems_e2e'      # ⚠️ REQUIRED: TEMS uses custom username
-      postgres_password: 'tems_e2e_pw'  # ⚠️ REQUIRED: Must match TEMS test code
+      # Database settings must match what DatabaseHelper.cs uses:
+      database_port: 5434              # ⚠️ REQUIRED
+      postgres_db: 'tems_e2e'          # ⚠️ REQUIRED: Match test code
+      postgres_user: 'tems_e2e'        # ⚠️ REQUIRED: Match test code
+      postgres_password: 'TemsE2e123!' # ⚠️ REQUIRED: Match test code
       
       # Test configuration
       run_smoke_only: true     # Fast feedback: smoke only in PR
@@ -141,11 +143,12 @@ jobs:
       web_directory: web/tems-portal
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
       
-      # TEMS preset + database port
+      # TEMS preset + database settings
       repo_preset: 'tems'
-      database_port: 5434              # ⚠️ REQUIRED: Preset can't control service ports
-      postgres_user: 'tems_e2e'        # ⚠️ REQUIRED: TEMS uses custom username
-      postgres_password: 'tems_e2e_pw' # ⚠️ REQUIRED: Must match TEMS test code
+      database_port: 5434              # ⚠️ REQUIRED
+      postgres_db: 'tems_e2e'          # ⚠️ REQUIRED: Match test code
+      postgres_user: 'tems_e2e'        # ⚠️ REQUIRED: Match test code
+      postgres_password: 'TemsE2e123!' # ⚠️ REQUIRED: Match test code
       
       run_smoke_only: false      # Run ALL tests
       e2e_retry_attempts: 2      # Retry flaky tests
@@ -288,12 +291,17 @@ with:
 
 > 💡 **Tip**: Ensure your test code uses the `E2E_DATABASE_CONNECTION_STRING` environment variable provided by the workflow instead of building its own connection string.
 
-**Fix:** Explicitly set `postgres_user`:
+### Database "tems_e2e" does not exist
+
+**Error:** `3D000: database "tems_e2e" does not exist`
+
+**Cause:** Test code hardcodes database name `tems_e2e`, but workflow created database with different name (preset uses `Tems_test`)
+
+**Fix:** Override `postgres_db` to match what test code expects:
 ```yaml
 with:
   repo_preset: 'tems'
-  database_port: 5434
-  postgres_user: 'tems_e2e'  # ⚠️ REQUIRED for TEMS
+  postgres_db: 'tems_e2e'  # ⚠️ REQUIRED: Match DatabaseHelper.cs
 ```
 
 ### Tests expect different environment variables

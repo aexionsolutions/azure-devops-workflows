@@ -493,6 +493,8 @@ jobs:
           E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
           E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
           E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
           E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
           E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
