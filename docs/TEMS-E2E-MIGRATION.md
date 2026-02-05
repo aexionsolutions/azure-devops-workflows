@@ -105,11 +105,13 @@ jobs:
       
       # Test configuration
       run_smoke_only: true     # Fast feedback: smoke only in PR
-      test_filter: '@smoke'    # Only run @smoke tagged scenarios
+      test_filter: '@smoke'    # Gherkin tag (@ prefix optional, converts to Category=smoke)
       node_version: '20'
     secrets:
       E2E_JWT_SIGNING_KEY: ${{ secrets.E2E_JWT_SIGNING_KEY }}
 ```
+
+> **💡 Filter Behavior**: Reqnroll/Gherkin tags (e.g., `@smoke`) become NUnit categories. The workflow automatically converts `@smoke` to `Category=smoke` filter.
 
 ---
 

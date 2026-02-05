@@ -505,13 +505,15 @@ jobs:
           echo "🧪 Running Reqnroll/SpecFlow E2E tests..."
           echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
           
-          # Determine test filter
+          # Determine test filter - Reqnroll tags (e.g., @smoke) become NUnit categories (without @)
           if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
-            FILTER="@smoke"
-            echo "ℹ️  Running smoke tests only (filter: @smoke)"
+            FILTER="smoke"
+            echo "ℹ️  Running smoke tests only (filter: Category=smoke)"
           elif [ -n "${{ inputs.test_filter }}" ]; then
+            # Remove @ prefix if present (Gherkin tags use @, NUnit categories don't)
             FILTER="${{ inputs.test_filter }}"
-            echo "ℹ️  Running tests with filter: $FILTER"
+            FILTER="${FILTER#@}"
+            echo "ℹ️  Running tests with filter: Category=$FILTER"
           else
             FILTER=""
             echo "ℹ️  Running all E2E tests (no filter)"
@@ -543,18 +545,27 @@ jobs:
             echo ""
             echo "🔄 Test attempt $ATTEMPT of $TOTAL_ATTEMPTS..."
             
-            # Build dotnet test command
-            TEST_CMD="dotnet test ${{ inputs.e2e_project }} -c Release --no-build --logger trx;LogFileName=e2e-attempt-${ATTEMPT}.trx --logger console;verbosity=normal"
-            
-            # Add filter if specified
-            if [ -n "$FILTER" ]; then
-              TEST_CMD="$TEST_CMD --filter TestCategory=$FILTER"
-            fi
-            
             # Run tests (continue on failure to allow retry)
+            # Note: We build the command directly instead of using eval to avoid shell escaping issues
             set +e
-            eval $TEST_CMD
-            EXIT_CODE=$?
+            if [ -n "$FILTER" ]; then
+              echo "ℹ️  Executing: dotnet test with --filter \"Category=$FILTER\""
+              dotnet test "${{ inputs.e2e_project }}" \
+                -c Release \
+                --no-build \
+                --logger "trx;LogFileName=e2e-attempt-${ATTEMPT}.trx" \
+                --logger "console;verbosity=normal" \
+                --filter "Category=$FILTER"
+              EXIT_CODE=$?
+            else
+              echo "ℹ️  Executing: dotnet test (no filter)"
+              dotnet test "${{ inputs.e2e_project }}" \
+                -c Release \
+                --no-build \
+                --logger "trx;LogFileName=e2e-attempt-${ATTEMPT}.trx" \
+                --logger "console;verbosity=normal"
+              EXIT_CODE=$?
+            fi
             set -e
             
             if [ $EXIT_CODE -eq 0 ]; then

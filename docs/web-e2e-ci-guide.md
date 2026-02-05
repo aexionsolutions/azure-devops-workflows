@@ -348,8 +348,8 @@ Scenario: User can create an order
 # Run only smoke tests
 test_filter: '@smoke'
 
-# Run regression tests
-test_filter: '@regression'
+# Run regression tests (@ prefix optional - will be stripped automatically)
+test_filter: '@regression'  # or just 'regression'
 
 # Run critical tests
 test_filter: '@critical'
@@ -358,11 +358,13 @@ test_filter: '@critical'
 test_filter: '@orders'
 
 # Multiple tags (AND logic - must have both)
-test_filter: '@smoke and @orders'
+test_filter: '@smoke&@orders'  # Use & for AND (NUnit syntax)
 
 # Multiple tags (OR logic - must have at least one)
-test_filter: '@smoke or @critical'
+test_filter: '@smoke|@critical'  # Use | for OR (NUnit syntax)
 ```
+
+> **Note**: Reqnroll tags (e.g., `@smoke`) are converted to NUnit categories. The workflow automatically strips the `@` prefix when building the filter. The actual NUnit filter used is `Category=smoke` for `test_filter: '@smoke'`.
 
 ---
 
