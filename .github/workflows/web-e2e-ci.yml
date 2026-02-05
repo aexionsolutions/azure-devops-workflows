@@ -69,6 +69,11 @@ on:
         required: false
         type: string
         default: 'postgres'
+      postgres_password:
+        description: 'PostgreSQL password (defaults to test_password_e2e_123)'
+        required: false
+        type: string
+        default: 'test_password_e2e_123'
       database_port:
         description: 'PostgreSQL port (must not conflict with other tests)'
         required: false
@@ -109,7 +114,7 @@ on:
 
 env:
   CALLER_WORKDIR: caller
-  POSTGRES_PASSWORD: test_password_e2e_123
+  POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
 
 jobs:
   # Build API once, reuse in E2E job

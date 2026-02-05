@@ -35,6 +35,7 @@ The `web-e2e-ci.yml` reusable workflow provides comprehensive end-to-end testing
 > with:
 >   repo_preset: 'tems'        # Auto-configures ports 5000/3000, database 'Tems_test'
 >   database_port: 5434        # ⚠️ REQUIRED for TEMS (GitHub Actions can't set service ports via preset)
+>   postgres_user: 'tems_e2e'  # ⚠️ REQUIRED if tests use custom username (default: 'postgres')
 > ```
 >
 > Alternatively, override manually:
@@ -195,6 +196,7 @@ jobs:
       # EASY: Use TEMS preset (auto-configures ports and database)
       repo_preset: 'tems'        # Sets api_port: 5000, web_port: 3000, postgres_db: 'Tems_test'
       database_port: 5434        # ⚠️ REQUIRED: Preset can't control service ports (GH Actions limitation)
+      postgres_user: 'tems_e2e'  # ⚠️ REQUIRED if tests use custom username
       
       # Test configuration
       run_smoke_only: true
@@ -304,7 +306,8 @@ jobs:
 | `node_version` | `'20'` | Node.js version | - |
 | `database_port` | `5432` | PostgreSQL host port | ⚠️ **`5434`** (must set explicitly) |
 | `postgres_db` | `'e2e_test'` | PostgreSQL database name | ⚠️ `'Tems_test'` (via preset) |
-| `postgres_user` | `'postgres'` | PostgreSQL username | - |
+| `postgres_user` | `'postgres'` | PostgreSQL username | ⚠️ `'tems_e2e'` |
+| `postgres_password` | `'test_password_e2e_123'` | PostgreSQL password | ⚠️ `'tems_e2e_pw'` |
 | `api_port` | `5100` | Port for API server | ⚠️ `5000` (via preset) |
 | `web_port` | `3100` | Port for Next.js server | ⚠️ `3000` (via preset) |
 | `enable_azurite` | `true` | Enable Azurite blob storage emulator | - |

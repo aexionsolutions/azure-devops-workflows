@@ -16,8 +16,10 @@ Use `repo_preset: 'tems'` to auto-configure most settings:
 
 ```yaml
 with:
-  repo_preset: 'tems'        # ✅ Auto-configures ports 5000/3000, database 'Tems_test'
-  database_port: 5434        # ⚠️ REQUIRED: Must be set explicitly (GitHub Actions limitation)
+  repo_preset: 'tems'              # ✅ Auto-configures ports 5000/3000, database 'Tems_test'
+  database_port: 5434              # ⚠️ REQUIRED: Must be set explicitly (GitHub Actions limitation)
+  postgres_user: 'tems_e2e'        # ⚠️ REQUIRED: TEMS uses custom username
+  postgres_password: 'tems_e2e_pw' # ⚠️ REQUIRED: Must match what TEMS test code expects
 ```
 
 This automatically sets:
@@ -25,6 +27,7 @@ This automatically sets:
 - Web Port: `3000` (instead of default 3100)  
 - Database: `Tems_test` (instead of default e2e_test)
 - **Database Port: Must be set to `5434` explicitly** (preset can't control service ports)
+- **Username/Password: Must match what your test code uses** (TEMS uses `tems_e2e`/`tems_e2e_pw`)
 
 ### Settings Reference
 
@@ -94,7 +97,9 @@ jobs:
       
       # TEMS preset (auto-configures ports 5000/3000 and database Tems_test)
       repo_preset: 'tems'
-      database_port: 5434      # ⚠️ REQUIRED: Preset can't control service ports (GH Actions limitation)
+      database_port: 5434            # ⚠️ REQUIRED: Preset can't control service ports
+      postgres_user: 'tems_e2e'      # ⚠️ REQUIRED: TEMS uses custom username
+      postgres_password: 'tems_e2e_pw'  # ⚠️ REQUIRED: Must match TEMS test code
       
       # Test configuration
       run_smoke_only: true     # Fast feedback: smoke only in PR
@@ -138,7 +143,9 @@ jobs:
       
       # TEMS preset + database port
       repo_preset: 'tems'
-      database_port: 5434        # ⚠️ REQUIRED: Preset can't control service ports
+      database_port: 5434              # ⚠️ REQUIRED: Preset can't control service ports
+      postgres_user: 'tems_e2e'        # ⚠️ REQUIRED: TEMS uses custom username
+      postgres_password: 'tems_e2e_pw' # ⚠️ REQUIRED: Must match TEMS test code
       
       run_smoke_only: false      # Run ALL tests
       e2e_retry_attempts: 2      # Retry flaky tests
@@ -263,6 +270,30 @@ with:
 with:
   repo_preset: 'tems'
   database_port: 5434  # ⚠️ REQUIRED for TEMS
+```
+
+### Password authentication failed for user "tems_e2e"
+
+**Error:** `28P01: password authentication failed for user "tems_e2e"`
+
+**Cause:** TEMS tests use custom PostgreSQL username/password (`tems_e2e`/`tems_e2e_pw`), but workflow defaults are `postgres`/`test_password_e2e_123`
+
+**Fix:** Explicitly set both `postgres_user` and `postgres_password`:
+```yaml
+with:
+  repo_preset: 'tems'
+  postgres_user: 'tems_e2e'        # Match what TEMS test code uses
+  postgres_password: 'tems_e2e_pw' # Match what TEMS test code uses
+```
+
+> 💡 **Tip**: Ensure your test code uses the `E2E_DATABASE_CONNECTION_STRING` environment variable provided by the workflow instead of building its own connection string.
+
+**Fix:** Explicitly set `postgres_user`:
+```yaml
+with:
+  repo_preset: 'tems'
+  database_port: 5434
+  postgres_user: 'tems_e2e'  # ⚠️ REQUIRED for TEMS
 ```
 
 ### Tests expect different environment variables
