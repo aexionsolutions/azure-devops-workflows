@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       repo_preset:
-        description: 'Auto-configure ports and database for known repos (tems, ravenxpress). Overrides api_port, web_port, and postgres_db if set.'
+        description: 'Auto-configure ports and database for known repos (tems, ravenxpress). Overrides api_port, web_port, and postgres_db if set. NOTE: database_port CANNOT be set by preset (GitHub Actions limitation - services start before steps run), so TEMS must explicitly pass database_port: 5434.'
         required: false
         type: string
         default: ''
@@ -222,13 +222,14 @@ jobs:
           
           if [ "$PRESET" = "tems" ]; then
             echo "ℹ️  Applying TEMS preset configuration"
-            echo "database_port=5434" >> $GITHUB_OUTPUT
+            # Note: database_port must be passed explicitly (can't be in preset due to GH Actions services limitation)
+            echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
             echo "api_port=5000" >> $GITHUB_OUTPUT
             echo "web_port=3000" >> $GITHUB_OUTPUT
             echo "postgres_db=Tems_test" >> $GITHUB_OUTPUT
           elif [ "$PRESET" = "ravenxpress" ]; then
             echo "ℹ️  Applying RavenXpress preset configuration"
-            echo "database_port=5432" >> $GITHUB_OUTPUT
+            echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
             echo "api_port=5100" >> $GITHUB_OUTPUT
             echo "web_port=3100" >> $GITHUB_OUTPUT
             echo "postgres_db=e2e_test" >> $GITHUB_OUTPUT

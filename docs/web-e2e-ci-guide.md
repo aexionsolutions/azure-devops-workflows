@@ -33,7 +33,8 @@ The `web-e2e-ci.yml` reusable workflow provides comprehensive end-to-end testing
 > **TEMS users:** Use the `repo_preset` input for automatic configuration:
 > ```yaml
 > with:
->   repo_preset: 'tems'  # Auto-configures ports 5000/3000, database 'Tems_test'
+>   repo_preset: 'tems'        # Auto-configures ports 5000/3000, database 'Tems_test'
+>   database_port: 5434        # ⚠️ REQUIRED for TEMS (GitHub Actions can't set service ports via preset)
 > ```
 >
 > Alternatively, override manually:
@@ -192,7 +193,8 @@ jobs:
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
       
       # EASY: Use TEMS preset (auto-configures ports and database)
-      repo_preset: 'tems'  # Sets api_port: 5000, web_port: 3000, postgres_db: 'Tems_test'
+      repo_preset: 'tems'        # Sets api_port: 5000, web_port: 3000, postgres_db: 'Tems_test'
+      database_port: 5434        # ⚠️ REQUIRED: Preset can't control service ports (GH Actions limitation)
       
       # Test configuration
       run_smoke_only: true
@@ -282,6 +284,8 @@ jobs:
 |-------|---------|-------------|-------------------|
 | `repo_preset` | `''` (none) | Auto-configure ports and database for known repos | `'tems'`, `'ravenxpress'` |
 
+> ⚠️ **Important**: `database_port` cannot be set by presets due to GitHub Actions limitation (services start before preset configuration step runs). Repos using non-default database ports (e.g., TEMS with 5434) must pass `database_port` explicitly as an input.
+
 ### Test Configuration
 
 | Input | Default | Description |
@@ -298,10 +302,11 @@ jobs:
 | Input | Default | Description | TEMS Override |
 |-------|---------|-------------|---------------|
 | `node_version` | `'20'` | Node.js version | - |
-| `postgres_db` | `'e2e_test'` | PostgreSQL database name | ⚠️ `'Tems_test'` |
+| `database_port` | `5432` | PostgreSQL host port | ⚠️ **`5434`** (must set explicitly) |
+| `postgres_db` | `'e2e_test'` | PostgreSQL database name | ⚠️ `'Tems_test'` (via preset) |
 | `postgres_user` | `'postgres'` | PostgreSQL username | - |
-| `api_port` | `5100` | Port for API server | ⚠️ `5000` |
-| `web_port` | `3100` | Port for Next.js server | ⚠️ `3000` |
+| `api_port` | `5100` | Port for API server | ⚠️ `5000` (via preset) |
+| `web_port` | `3100` | Port for Next.js server | ⚠️ `3000` (via preset) |
 | `enable_azurite` | `true` | Enable Azurite blob storage emulator | - |
 | `seed_data_script` | `''` | Path to SQL seed file (e.g., `tests/seed-data.sql`) | - |
 

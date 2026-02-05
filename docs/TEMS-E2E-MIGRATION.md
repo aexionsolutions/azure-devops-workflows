@@ -12,22 +12,24 @@ This guide helps TEMS migrate from the local PowerShell E2E test script to the r
 
 ### Easy Solution: Use the Preset
 
-Simply add `repo_preset: 'tems'` to auto-configure everything:
+Use `repo_preset: 'tems'` to auto-configure most settings:
 
 ```yaml
 with:
-  repo_preset: 'tems'  # ✅ Auto-configures ports 5000/3000, database 'Tems_test'
+  repo_preset: 'tems'        # ✅ Auto-configures ports 5000/3000, database 'Tems_test'
+  database_port: 5434        # ⚠️ REQUIRED: Must be set explicitly (GitHub Actions limitation)
 ```
 
 This automatically sets:
 - API Port: `5000` (instead of default 5100)
 - Web Port: `3000` (instead of default 3100)  
 - Database: `Tems_test` (instead of default e2e_test)
+- **Database Port: Must be set to `5434` explicitly** (preset can't control service ports)
 
-### Alternative: Manual Override
+### Settings Reference
 
-| Setting | Workflow Default | TEMS Value | Manual Override |
-|---------|------------------|------------|-----------------|
+| Setting | Workflow Default | TEMS Value | How to Set |
+|---------|------------------|------------|------------|
 | API Port | 5100 | **5000** | `api_port: 5000` |
 | Web Port | 3100 | **3000** | `web_port: 3000` |
 | Database | `e2e_test` | **`Tems_test`** | `postgres_db: 'Tems_test'` |
@@ -82,16 +84,17 @@ jobs:
   # E2E: Smoke tests only (fast feedback)
   web-e2e:
     name: Web E2E (Smoke Tests)
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.2.0
     with:
       # Required inputs
-      solution: Ems.sln
+      solution: TEMS.sln
       api_project: backend/Ems.Api/Ems.Api.csproj
       web_directory: web/tems-portal
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
       
-      # EASY: Use TEMS preset (auto-configures ports and database)
+      # TEMS preset (auto-configures ports 5000/3000 and database Tems_test)
       repo_preset: 'tems'
+      database_port: 5434      # ⚠️ REQUIRED: Preset can't control service ports (GH Actions limitation)
       
       # Test configuration
       run_smoke_only: true     # Fast feedback: smoke only in PR
@@ -126,17 +129,17 @@ on:
 jobs:
   e2e-full:
     name: Full E2E Regression
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.2.0
     with:
-      solution: Ems.sln
+      solution: TEMS.sln
       api_project: backend/Ems.Api/Ems.Api.csproj
       web_directory: web/tems-portal
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
       
-      # CRITICAL: TEMS-specific overrides
-      api_port: 5000
-      weEASY: Use TEMS preset
-      repo_preset: 'tems
+      # TEMS preset + database port
+      repo_preset: 'tems'
+      database_port: 5434        # ⚠️ REQUIRED: Preset can't control service ports
+      
       run_smoke_only: false      # Run ALL tests
       e2e_retry_attempts: 2      # Retry flaky tests
       e2e_enable_video: true     # Capture videos for debugging
@@ -195,15 +198,16 @@ openssl rand -base64 48
 
 ## Comparison: Local Script vs Workflow
 
-| Local Script | Reusable Workflow | Notes |
-|--------------|-------------------|-------|
-| Manual Docker setup | Automatic services | PostgreSQL + Azurite in Docker |
-| Port 5000/3000 | Default 5100/3100 | **Override to 5000/3000** |
-| `Tems_test` database | Default `e2e_test` | **Override to `Tems_test`** |
-| Manual API build Auto with `repo_preset: 'tems'` | Or manual override |
-| `Tems_test` database | Auto with preset | Or manual override
-| Local video only | Optional CI videos | `e2e_enable_video: true` |
-| Manual cleanup | Automatic cleanup | On workflow completion |
+| Feature | Local Script | Reusable Workflow |
+|---------|--------------|-------------------|
+| Docker Services | Manual setup | ✅ Automatic (PostgreSQL + Azurite) |
+| API Port | 5000 | ✅ 5000 (via `repo_preset: 'tems'`) |
+| Web Port | 3000 | ✅ 3000 (via `repo_preset: 'tems'`) |
+| Database Port | 5434 | ✅ 5434 (via `database_port: 5434` input) |
+| Database Name | `Tems_test` | ✅ `Tems_test` (via preset) |
+| API Build | Manual | ✅ Automatic |
+| Videos | Local only | ✅ Optional CI (`e2e_enable_video: true`) |
+| Cleanup | Manual | ✅ Automatic |
 
 ---
 
@@ -245,6 +249,20 @@ with:
 ```yaml
 with:
   repo_preset: 'tems'
+  database_port: 5434  # Don't forget this!
+```
+
+### PostgreSQL connection refused (port 5434)
+
+**Error:** `Failed to connect to 127.0.0.1:5434 - Connection refused`
+
+**Cause:** `database_port` not set (GitHub Actions limitation - preset can't control service ports)
+
+**Fix:** Explicitly set `database_port` as an input:
+```yaml
+with:
+  repo_preset: 'tems'
+  database_port: 5434  # ⚠️ REQUIRED for TEMS
 ```
 
 ### Tests expect different environment variables
