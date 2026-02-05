@@ -290,7 +290,7 @@ jobs:
 ### web-e2e-deployed.yml
 
 | Input | Required | Description | Example |
-|-------|----------|-------------|---------||
+|-------|----------|-------------|---------|
 | `git_ref` | ❌ | Git ref (tag/branch/SHA) | `${{ inputs.release_tag }}` |
 | `web_url` | ✅ | Deployed web URL | `https://tems-dev-web.azurewebsites.net` |
 | `api_url` | ✅ | Deployed API URL | `https://tems-dev-api.azurewebsites.net` |

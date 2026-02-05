@@ -534,21 +534,6 @@ See [web-e2e-deployed-guide.md](web-e2e-deployed-guide.md) for comprehensive doc
 - Troubleshooting deployed environment issues
 
 ---
-```yaml
-with:
-  e2e_project: tests/MyApp.E2E/MyApp.E2E.csproj
-  run_playwright_tests: false
-```
-
-**4. Playwright Only**
-```yaml
-with:
-  # Don't set e2e_project
-  run_playwright_tests: true
-```
-
-📚 **Detailed Guide**: See [web-e2e-ci-guide.md](web-e2e-ci-guide.md) for comprehensive documentation.
-- ✅ Conditional step execution
 
 ## Best Practices
 
