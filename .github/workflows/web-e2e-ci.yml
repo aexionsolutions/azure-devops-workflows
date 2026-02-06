@@ -674,6 +674,7 @@ jobs:
           name: reqnroll-screenshots-${{ github.run_number }}
           path: |
             caller/**/Screenshot/**
+            caller/**/Screenshots/**
           if-no-files-found: ignore
           retention-days: 7
 
