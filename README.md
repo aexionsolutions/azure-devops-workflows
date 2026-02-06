@@ -120,10 +120,12 @@ jobs:
 | Workflow | Purpose | Required Inputs | Status |
 |----------|---------|----------------|--------|
 | [dotnet-ci.yml](.github/workflows/dotnet-ci.yml) | .NET build, test, coverage, SonarCloud | `js_lcov_path`, `sonar_exclusions`, `sonar_coverage_exclusions` | ✅ Ready |
+| [web-ci.yml](.github/workflows/web-ci.yml) | React/Next.js lint, test | - | ✅ Ready |
+| [web-e2e-ci.yml](.github/workflows/web-e2e-ci.yml) | E2E tests with Docker services (PR validation) | `solution`, `api_project`, `web_directory` | ✅ Ready |
+| [web-e2e-deployed.yml](.github/workflows/web-e2e-deployed.yml) | E2E tests against deployed environments | `web_url`, `api_url` | ✅ Ready |
 | [web-deploy.yml](.github/workflows/web-deploy.yml) | Next.js build & package | `web_directory`, `concurrency_group` | ✅ Ready |
 | [api-deploy.yml](.github/workflows/api-deploy.yml) | .NET API build & package | `api_project`, `concurrency_group` | ✅ Ready |
 | [azure-infra-deploy.yml](.github/workflows/azure-infra-deploy.yml) | Deploy Bicep infrastructure | `environment`, `resource_group`, `name_prefix` | ✅ Ready |
-| [web-ci.yml](.github/workflows/web-ci.yml) | React/Next.js lint, test | - | ✅ Ready |
 
 ---
 
@@ -191,6 +193,161 @@ concurrency_group: ravenxpress-api-build
 | `pr_number` | ❌ | PR number | `${{ github.event.pull_request.number }}` |
 | `pr_head` | ❌ | PR head branch | `${{ github.head_ref }}` |
 | `pr_base` | ❌ | PR base branch | `${{ github.base_ref }}` |
+
+### web-ci.yml
+
+| Input | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `working_directory` | ❌ | Web project path | `rx-web` |
+| `run_tests` | ❌ | Enable web tests | `true` |
+| `node_version` | ❌ | Node.js version | `20` |
+
+### web-e2e-ci.yml
+
+> **⚠️ IMPORTANT:** Use `repo_preset: 'tems'` for TEMS (auto-configures ports 5000/3000, database 'Tems_test'). RavenXpress can omit preset or use `repo_preset: 'ravenxpress'`.
+
+| Input | Required | Description | Example | TEMS Preset |
+|-------|----------|-------------|---------|-------------|
+| `repo_preset` | ❌ | Auto-configure for known repos | `'tems'`, `'ravenxpress'` | `'tems'` ✅ |
+| `solution` | ✅ | Path to .sln file | `RavenXpress.sln` | `Ems.sln` |
+| `api_project` | ✅ | API .csproj path | `rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj` | `backend/Ems.Api/Ems.Api.csproj` |
+| `web_directory` | ✅ | Web project path | `rx-web` | `web/tems-portal` |
+| `e2e_project` | ❌ | E2E test .csproj (Reqnroll) | `tests/RavenXpress.E2E/RavenXpress.E2E.csproj` | `tests/Ems.E2E/Ems.E2E.csproj` |
+| `node_version` | ❌ | Node.js version | `20` | - |
+| `run_smoke_only` | ❌ | Run smoke tests only | `true` (default) | - |
+| `test_filter` | ❌ | Reqnroll test filter | `@smoke`, `@regression` | - |
+| `e2e_retry_attempts` | ❌ | Retry attempts for flaky tests | `1` (no retry) | - |
+| `e2e_enable_video` | ❌ | Capture video recordings | `false` (default) | - |
+| `enable_azurite` | ❌ | Enable Azurite emulator | `true` (default) | - |
+| `seed_data_script` | ❌ | SQL seed file path | `tests/seed-data.sql` | - |
+| `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) | - |
+| `postgres_db` | ❌ | Database name (override preset) | `e2e_test` | Auto: `Tems_test` |
+| `api_port` | ❌ | API port (override preset) | `5100` | Auto: `5000` |
+| `web_port` | ❌ | Web port (override preset) | `3100` | Auto: `3000` |
+
+**Example: E2E tests in PR workflow**
+
+```yaml
+name: PR CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  # RavenXpress example (uses workflow defaults)
+  web-e2e-rx:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    with:
+      solution: RavenXpress.sln
+      api_project: rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj
+      web_directory: rx-web
+      e2e_project: tests/RavenXpress.E2E/RavenXpress.E2E.csproj
+      repo_preset: 'ravenxpress'  # Optional: Explicit preset
+      run_smoke_only: true
+      test_filter: '@smoke'
+    secrets:
+      E2E_JWT_SIGNING_KEY: ${{ secrets.E2E_JWT_SIGNING_KEY }}
+
+  # TEMS example (use preset for auto-configuration)
+  web-e2e-tems:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    with:
+      solution: Ems.sln
+      api_project: backend/Ems.Api/Ems.Api.csproj
+      web_directory: web/tems-portal
+      e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+      repo_preset: 'tems'  # ✅ Auto-configures ports 5000/3000, database 'Tems_test'
+      run_smoke_only: true
+      test_filter: '@smoke'
+```
+
+**Example: Full E2E suite on deployment**
+
+```yaml
+name: Deploy to Staging
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  e2e-full:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    with:
+      solution: RavenXpress.sln
+      api_project: rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj
+      web_directory: rx-web
+      e2e_project: tests/RavenXpress.E2E/RavenXpress.E2E.csproj
+      run_smoke_only: false  # Full test suite
+      e2e_retry_attempts: 2  # Retry flaky tests
+      e2e_enable_video: true  # Capture videos for debugging
+      seed_data_script: tests/e2e-seed-data.sql  # Custom seed data
+    secrets:
+      E2E_JWT_SIGNING_KEY: ${{ secrets.E2E_JWT_SIGNING_KEY }}
+```
+
+### web-e2e-deployed.yml
+
+| Input | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `git_ref` | ❌ | Git ref (tag/branch/SHA) | `${{ inputs.release_tag }}` |
+| `web_url` | ✅ | Deployed web URL | `https://tems-dev-web.azurewebsites.net` |
+| `api_url` | ✅ | Deployed API URL | `https://tems-dev-api.azurewebsites.net` |
+| `e2e_project` | ❌ | E2E test .csproj (Reqnroll) | `tests/Ems.E2E/Ems.E2E.csproj` |
+| `web_directory` | ❌ | Web project path (for Playwright) | `web/tems-portal` |
+| `test_filter` | ❌ | Reqnroll test filter | `@smoke` (default) |
+| `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) |
+| `playwright_project` | ❌ | Playwright project | `chromium`, `firefox` |
+| `e2e_retry_attempts` | ❌ | Retry attempts | `3` (default for deployed) |
+| `e2e_enable_video` | ❌ | Capture video recordings | `false` (default) |
+| `health_check_enabled` | ❌ | Health checks before tests | `true` (default) |
+| `health_check_timeout` | ❌ | Health check timeout (seconds) | `300` (default) |
+| `node_version` | ❌ | Node.js version | `20` (default) |
+| `dotnet_version` | ❌ | .NET version | `10.0.x` (default) |
+| `api_key` | ❌ | API key for deployed env | - |
+
+**Example: Post-deployment smoke tests**
+
+```yaml
+name: Deploy to Staging
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  deploy-api:
+    # ... your API deployment
+  
+  deploy-web:
+    needs: deploy-api
+    # ... your web deployment
+  
+  e2e-smoke:
+    name: E2E Smoke Tests
+    needs: [deploy-api, deploy-web]
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.0.1
+    with:
+      git_ref: ${{ github.ref_name }}  # ✅ Use release tag to match deployed code
+      e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+      web_url: https://tems-staging-web.azurewebsites.net
+      api_url: https://tems-staging-api.azurewebsites.net
+      web_directory: web/tems-portal
+      test_filter: '@smoke or @critical'
+      e2e_retry_attempts: 3
+    secrets:
+      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+```
+
+**See [web-e2e-deployed-guide.md](docs/web-e2e-deployed-guide.md) for complete documentation including:**
+- **Using `git_ref` to ensure test version matches deployed code**
+- Test artifact strategy (packaging tests during release)
+- Health check configuration
+- Post-deployment validation patterns
+- Production monitoring with scheduled tests
+- Comparison with CI workflow
 
 ### web-deploy.yml
 
