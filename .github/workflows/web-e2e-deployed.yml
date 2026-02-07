@@ -192,6 +192,19 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
+      # Validate Azure authentication is configured when Key Vault is requested
+      - name: Validate Azure authentication for Key Vault
+        if: inputs.azure_keyvault_name != ''
+        shell: bash
+        run: |
+          if [ -z "${{ inputs.azure_client_id }}" ] && [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "❌ Error: azure_keyvault_name is set but no Azure authentication is configured."
+            echo "   Please provide either:"
+            echo "   - azure_client_id, azure_tenant_id, azure_subscription_id (for OIDC)"
+            echo "   - AZURE_CREDENTIALS secret (for service principal)"
+            exit 1
+          fi
+      
       # Retrieve database connection string from Azure Key Vault
       - name: Get database connection string from Key Vault
         if: inputs.azure_keyvault_name != ''
@@ -212,7 +225,13 @@ jobs:
           
           echo "✅ Successfully retrieved connection string from Key Vault"
           echo "::add-mask::$CONN_STR"
-          echo "connection_string=$CONN_STR" >> $GITHUB_OUTPUT
+          
+          # Use heredoc format for safe multi-line output
+          {
+            echo 'connection_string<<EOF'
+            echo "$CONN_STR"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
       
       # Health Checks
       - name: Health Check - API
@@ -288,6 +307,22 @@ jobs:
           npm ci
           npx playwright install --with-deps
       
+      # Set database connection string conditionally (only when non-empty)
+      - name: Set database connection string
+        if: inputs.e2e_project != ''
+        shell: bash
+        run: |
+          # Priority: Key Vault > direct input > secret > not set
+          CONN_STR="${{ steps.get_db_conn.outputs.connection_string || inputs.database_connection_string || secrets.DATABASE_CONNECTION_STRING }}"
+          
+          if [ -n "$CONN_STR" ]; then
+            echo "✅ Database connection string configured"
+            echo "::add-mask::$CONN_STR"
+            echo "ConnectionStrings__Postgres=$CONN_STR" >> $GITHUB_ENV
+          else
+            echo "ℹ️ No database connection string provided; tests will use default/local configuration"
+          fi
+      
       # Run Reqnroll E2E Tests
       - name: Run Reqnroll E2E tests
         if: inputs.e2e_project != ''
@@ -304,8 +339,7 @@ jobs:
           E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
           E2E_API_KEY: ${{ inputs.api_key }}
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
-          # Database connection string (priority: Key Vault > direct input > secret > not set)
-          ConnectionStrings__Postgres: ${{ steps.get_db_conn.outputs.connection_string || inputs.database_connection_string || secrets.DATABASE_CONNECTION_STRING }}
+          # ConnectionStrings__Postgres set in previous step (only when non-empty)
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"

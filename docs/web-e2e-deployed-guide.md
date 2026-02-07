@@ -241,7 +241,7 @@ jobs:
 
 ---
 
-### 4. Playwright Only (No Reqnroll)
+### 5. Playwright Only (No Reqnroll)
 
 Run only Playwright browser tests:
 
@@ -260,7 +260,7 @@ jobs:
 
 ---
 
-### 5. Reqnroll Only (No Playwright)
+### 6. Reqnroll Only (No Playwright)
 
 Run only Reqnroll BDD tests:
 
@@ -341,7 +341,7 @@ jobs:
 1. Azure Key Vault (if `azure_keyvault_name` is set)
 2. Direct input (`database_connection_string`)
 3. Secret (`DATABASE_CONNECTION_STRING`)
-4. Not set (tests use default/local configuration)
+4. Not set (env var not added; tests use default/local configuration from appsettings.json)
 
 ### Secrets
 

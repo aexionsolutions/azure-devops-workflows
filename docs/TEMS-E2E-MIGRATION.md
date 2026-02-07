@@ -566,7 +566,7 @@ The reusable workflow sets the database connection string with this priority:
 1. **Azure Key Vault** (if `azure_keyvault_name` is set)
 2. **Direct input** (`database_connection_string` input)
 3. **Secret** (`DATABASE_CONNECTION_STRING` secret)
-4. **Not set** (tests use default/local configuration)
+4. **Not set** (env var not added; tests use default/local configuration from appsettings.json)
 
 ---
 
