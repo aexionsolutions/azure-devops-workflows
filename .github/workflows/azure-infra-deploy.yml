@@ -555,6 +555,7 @@ jobs:
           AAD_AUTHORITY: ${{ secrets.AAD_B2C_AUTHORITY }}
           AAD_CLIENT_ID: ${{ secrets.AAD_B2C_CLIENT_ID }}
           AAD_API_SCOPE: ${{ secrets.AAD_B2C_API_SCOPE }}
+          ASPNET_ENV: ${{ inputs.environment == 'prod' && 'Production' || (inputs.environment == 'dev' && 'Development' || 'Staging') }}
         run: |
           set -e
           
@@ -562,26 +563,25 @@ jobs:
           
           # Set API app settings with Key Vault references
           API_SETTINGS=(
-            "ASPNETCORE_ENVIRONMENT=Production"
+            "ASPNETCORE_ENVIRONMENT=$ASPNET_ENV"
             "APPLICATIONINSIGHTS_CONNECTION_STRING=$APP_INSIGHTS_CONN"
             "Storage__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/StorageConnectionString)"
             "Redis__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/RedisConnectionString)"
             "ServiceBus__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/ServiceBusConnectionString)"
             "ConnectionStrings__Postgres=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/PostgresConnectionString)"
-            "Auth:Mode=b2c"
           )
           
-          # Add AAD B2C settings if provided
-          if [ -n "$AAD_CLIENT_ID" ]; then 
+          # Add AAD B2C settings if provided (only when AAD secrets are configured)
+          if [ -n "$AAD_CLIENT_ID" ] && [ -n "$AAD_AUTHORITY" ]; then
+            API_SETTINGS+=("Auth:Mode=b2c")
             API_SETTINGS+=("Auth:ClientId=$AAD_CLIENT_ID")
-          fi
-          if [ -n "$AAD_AUTHORITY" ]; then 
             API_SETTINGS+=("Auth:B2C:Authority=$AAD_AUTHORITY")
-          fi
-          if [ -n "$AAD_API_SCOPE" ]; then
-            # Extract audience from scope (api://GUID/Scope  api://GUID)
-            AUDIENCE_URI=$(echo "$AAD_API_SCOPE" | sed 's|^\(api://[^/]*\)/.*|\1|; t; s|^\([^/]*\)/.*|\1|')
-            API_SETTINGS+=("Auth:Audience=$AUDIENCE_URI")
+            
+            if [ -n "$AAD_API_SCOPE" ]; then
+              # Extract audience from scope (api://GUID/Scope → api://GUID)
+              AUDIENCE_URI=$(echo "$AAD_API_SCOPE" | sed 's|^\(api://[^/]*\)/.*|\1|; t; s|^\([^/]*\)/.*|\1|')
+              API_SETTINGS+=("Auth:Audience=$AUDIENCE_URI")
+            fi
           fi
           
           az webapp config appsettings set \
