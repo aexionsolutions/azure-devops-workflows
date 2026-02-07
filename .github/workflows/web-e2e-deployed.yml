@@ -187,7 +187,7 @@ jobs:
           subscription-id: ${{ inputs.azure_subscription_id }}
       
       - name: Azure Login (Service Principal - Legacy)
-        if: inputs.azure_keyvault_name != '' && inputs.azure_client_id == '' && secrets.AZURE_CREDENTIALS != ''
+        if: inputs.azure_keyvault_name != '' && inputs.azure_client_id == ''
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
@@ -196,8 +196,10 @@ jobs:
       - name: Validate Azure authentication for Key Vault
         if: inputs.azure_keyvault_name != ''
         shell: bash
+        env:
+          AZURE_CREDS: ${{ secrets.AZURE_CREDENTIALS }}
         run: |
-          if [ -z "${{ inputs.azure_client_id }}" ] && [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+          if [ -z "${{ inputs.azure_client_id }}" ] && [ -z "$AZURE_CREDS" ]; then
             echo "❌ Error: azure_keyvault_name is set but no Azure authentication is configured."
             echo "   Please provide either:"
             echo "   - azure_client_id, azure_tenant_id, azure_subscription_id (for OIDC)"
