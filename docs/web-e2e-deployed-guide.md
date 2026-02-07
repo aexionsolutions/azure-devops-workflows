@@ -139,7 +139,75 @@ jobs:
 
 ---
 
-### 3. Scheduled Production Health Checks
+### 3. With Azure Key Vault for Database Connection
+
+For tests that need database access (e.g., TEMS Reqnroll tests), retrieve the connection string from Azure Key Vault:
+
+```yaml
+# .github/workflows/promote-release.yml
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [dev, uat, preprod, prod]
+      release_tag:
+        required: true
+
+jobs:
+  deploy-api:
+    name: Deploy API
+    # ... deployment steps
+  
+  deploy-web:
+    name: Deploy Web
+    needs: deploy-api
+    # ... deployment steps
+  
+  e2e-tests:
+    name: E2E Tests (Deployed)
+    needs: [deploy-api, deploy-web]
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.2.0
+    permissions:
+      id-token: write  # Required for Azure OIDC authentication
+      contents: read
+    with:
+      git_ref: ${{ inputs.release_tag }}
+      e2e_project: tests/Ems.E2E/Ems.E2E.csproj
+      web_url: https://tems-${{ inputs.environment }}-web.azurewebsites.net
+      api_url: https://tems-${{ inputs.environment }}-api.azurewebsites.net
+      web_directory: web/tems-portal
+      
+      # Environment & Database Configuration
+      environment_name: ${{ inputs.environment }}  # Loads appsettings.{env}.json
+      azure_keyvault_name: tems-${{ inputs.environment }}-kv
+      azure_keyvault_secret_name: PostgresConnectionString
+      azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      # Test Configuration
+      test_filter: '@smoke'
+      e2e_retry_attempts: 3
+    secrets:
+      E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
+      E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}  # Fallback if OIDC not configured
+```
+
+**What this does:**
+- Authenticates to Azure using workload identity (OIDC)
+- Retrieves database connection string from Key Vault
+- Sets `ConnectionStrings__Postgres` environment variable for tests
+- Tests can connect to the deployed database
+
+---
+
+### 4. Scheduled Production Health Checks
 
 Monitor production continuously with scheduled smoke tests:
 
@@ -257,6 +325,24 @@ jobs:
 |-------|---------|-------------|
 | `api_key` | `''` | API key if required by deployed environment |
 
+### Database Configuration
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `environment_name` | `''` | Environment name (dev, uat, preprod, prod) - used for loading appsettings.{env}.json |
+| `database_connection_string` | `''` | Database connection string (direct). Use this for non-Azure deployments. |
+| `azure_keyvault_name` | `''` | Azure Key Vault name to retrieve database connection string from |
+| `azure_keyvault_secret_name` | `'PostgresConnectionString'` | Secret name in Key Vault for database connection string |
+| `azure_client_id` | `''` | Azure Client ID for Key Vault access (workload identity/OIDC) |
+| `azure_tenant_id` | `''` | Azure Tenant ID for Key Vault access |
+| `azure_subscription_id` | `''` | Azure Subscription ID for Key Vault access |
+
+**Note:** Database connection retrieval priority:
+1. Azure Key Vault (if `azure_keyvault_name` is set)
+2. Direct input (`database_connection_string`)
+3. Secret (`DATABASE_CONNECTION_STRING`)
+4. Not set (tests use default/local configuration)
+
 ### Secrets
 
 | Secret | Required | Description |
@@ -264,6 +350,8 @@ jobs:
 | `E2E_AUTH_TOKEN` | No | Authentication token for deployed environment |
 | `E2E_TEST_USER_EMAIL` | No | Test user email for authentication tests |
 | `E2E_TEST_USER_PASSWORD` | No | Test user password for authentication tests |
+| `AZURE_CREDENTIALS` | No | Azure credentials JSON (legacy auth method for Key Vault) |
+| `DATABASE_CONNECTION_STRING` | No | Database connection string (alternative to Key Vault) |
 
 ---
 
@@ -275,6 +363,7 @@ The workflow automatically sets these environment variables for your tests:
 
 ```bash
 RUN_E2E=true
+RAVENXPRESS_E2E_ENV=dev  # From environment_name input
 E2E_BASE_URL=https://tems-dev-web.azurewebsites.net
 E2E_API_BASE_URL=https://tems-dev-api.azurewebsites.net
 E2E_HEADLESS=true
@@ -285,6 +374,7 @@ E2E_TEST_USER_EMAIL=<secret>
 E2E_TEST_USER_PASSWORD=<secret>
 E2E_API_KEY=<input>
 E2E_RETRY_ATTEMPTS=3
+ConnectionStrings__Postgres=<from Key Vault or input>
 ```
 
 ### For Playwright Tests

@@ -97,6 +97,52 @@ on:
         required: false
         type: string
         default: ''
+      
+      # Environment Configuration
+      environment_name:
+        description: 'Environment name (dev, uat, preprod, prod) - used for loading appsettings.{env}.json'
+        required: false
+        type: string
+        default: ''
+      
+      # Database Configuration
+      database_connection_string:
+        description: 'Database connection string for E2E tests (overrides default)'
+        required: false
+        type: string
+        default: ''
+      
+      # Azure Key Vault (alternative to direct connection string)
+      azure_keyvault_name:
+        description: 'Azure Key Vault name to retrieve secrets from'
+        required: false
+        type: string
+        default: ''
+      
+      azure_keyvault_secret_name:
+        description: 'Secret name in Key Vault for database connection string'
+        required: false
+        type: string
+        default: 'PostgresConnectionString'
+      
+      # Azure Authentication (required if using Key Vault)
+      azure_client_id:
+        description: 'Azure Client ID for Key Vault access (workload identity)'
+        required: false
+        type: string
+        default: ''
+      
+      azure_tenant_id:
+        description: 'Azure Tenant ID for Key Vault access'
+        required: false
+        type: string
+        default: ''
+      
+      azure_subscription_id:
+        description: 'Azure Subscription ID for Key Vault access'
+        required: false
+        type: string
+        default: ''
     
     secrets:
       E2E_AUTH_TOKEN:
@@ -108,18 +154,65 @@ on:
       E2E_TEST_USER_PASSWORD:
         description: 'Test user password for authentication tests'
         required: false
+      AZURE_CREDENTIALS:
+        description: 'Azure credentials JSON (legacy auth method)'
+        required: false
+      DATABASE_CONNECTION_STRING:
+        description: 'Database connection string (alternative to using Key Vault)'
+        required: false
 
 jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Grant permissions for Azure workload identity (OIDC)
+    permissions:
+      id-token: write
+      contents: read
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.git_ref || github.ref }}
+      
+      # Azure Login (if Key Vault is used)
+      - name: Azure Login (Workload Identity)
+        if: inputs.azure_keyvault_name != '' && inputs.azure_client_id != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
+          subscription-id: ${{ inputs.azure_subscription_id }}
+      
+      - name: Azure Login (Service Principal - Legacy)
+        if: inputs.azure_keyvault_name != '' && inputs.azure_client_id == '' && secrets.AZURE_CREDENTIALS != ''
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      # Retrieve database connection string from Azure Key Vault
+      - name: Get database connection string from Key Vault
+        if: inputs.azure_keyvault_name != ''
+        id: get_db_conn
+        shell: bash
+        run: |
+          echo "🔐 Retrieving database connection string from Key Vault: ${{ inputs.azure_keyvault_name }}"
+          
+          CONN_STR=$(az keyvault secret show \
+            --vault-name "${{ inputs.azure_keyvault_name }}" \
+            --name "${{ inputs.azure_keyvault_secret_name }}" \
+            --query value -o tsv)
+          
+          if [ -z "$CONN_STR" ]; then
+            echo "❌ Failed to retrieve connection string from Key Vault"
+            exit 1
+          fi
+          
+          echo "✅ Successfully retrieved connection string from Key Vault"
+          echo "::add-mask::$CONN_STR"
+          echo "connection_string=$CONN_STR" >> $GITHUB_OUTPUT
       
       # Health Checks
       - name: Health Check - API
@@ -200,6 +293,7 @@ jobs:
         if: inputs.e2e_project != ''
         env:
           RUN_E2E: true
+          RAVENXPRESS_E2E_ENV: ${{ inputs.environment_name }}  # Loads appsettings.{environment}.json
           E2E_BASE_URL: ${{ inputs.web_url }}
           E2E_API_BASE_URL: ${{ inputs.api_url }}
           E2E_HEADLESS: true
@@ -210,6 +304,8 @@ jobs:
           E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
           E2E_API_KEY: ${{ inputs.api_key }}
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
+          # Database connection string (priority: Key Vault > direct input > secret > not set)
+          ConnectionStrings__Postgres: ${{ steps.get_db_conn.outputs.connection_string || inputs.database_connection_string || secrets.DATABASE_CONNECTION_STRING }}
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
