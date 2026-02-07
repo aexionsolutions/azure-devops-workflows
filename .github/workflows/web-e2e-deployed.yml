@@ -406,7 +406,6 @@ jobs:
             **/test-results/**
           if-no-files-found: ignore
           retention-days: 7
-          retention-days: 7
       
       # Upload Reqnroll artifacts
       - name: Upload Reqnroll test results
