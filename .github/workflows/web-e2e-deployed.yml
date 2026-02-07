@@ -309,6 +309,19 @@ jobs:
           npm ci
           npx playwright install --with-deps
       
+      # Install Playwright browsers for Reqnroll tests (if using Microsoft.Playwright)
+      - name: Install Playwright for Reqnroll
+        if: inputs.e2e_project != ''
+        shell: bash
+        run: |
+          # Check if project uses Microsoft.Playwright
+          if grep -q "Microsoft.Playwright" "${{ inputs.e2e_project }}"; then
+            echo "📦 Installing Playwright browsers for Reqnroll tests..."
+            pwsh -c "cd $(dirname '${{ inputs.e2e_project }}'); dotnet build; pwsh bin/Debug/net*/playwright.ps1 install chromium --with-deps"
+          else
+            echo "ℹ️ Reqnroll tests don't use Microsoft.Playwright - skipping browser installation"
+          fi
+      
       # Set database connection string conditionally (only when non-empty)
       - name: Set database connection string
         if: inputs.e2e_project != ''
