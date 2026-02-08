@@ -57,6 +57,13 @@ on:
         required: true
         type: string
       
+      # App Service Configuration
+      postgres_connection_key:
+        description: 'Connection string key name in App Service settings (e.g., Default, Postgres, Database)'
+        required: false
+        type: string
+        default: 'Default'
+      
       # Feature Flags
       enable_kv_rbac:
         description: 'Enable automatic Key Vault RBAC assignment for workflow and managed identities'
@@ -568,7 +575,7 @@ jobs:
             "Storage__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/StorageConnectionString)"
             "Redis__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/RedisConnectionString)"
             "ServiceBus__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/ServiceBusConnectionString)"
-            "ConnectionStrings__Postgres=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/PostgresConnectionString)"
+            "ConnectionStrings__${{ inputs.postgres_connection_key }}=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/PostgresConnectionString)"
           )
           
           # Add AAD B2C settings if provided (only when AAD secrets are configured)
