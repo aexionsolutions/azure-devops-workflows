@@ -148,17 +148,36 @@ on:
       E2E_AUTH_TOKEN:
         description: 'Authentication token for deployed environment (if required)'
         required: false
-      E2E_TEST_USER_EMAIL:
-        description: 'Test user email for authentication tests'
-        required: false
-      E2E_TEST_USER_PASSWORD:
-        description: 'Test user password for authentication tests'
-        required: false
       AZURE_CREDENTIALS:
         description: 'Azure credentials JSON (legacy auth method)'
         required: false
       DATABASE_CONNECTION_STRING:
         description: 'Database connection string (alternative to using Key Vault)'
+        required: false
+      # NEW persona secrets
+      E2E_ADMIN_USER_EMAIL:
+        description: 'Admin persona email for B2C ROPC'
+        required: false
+      E2E_ADMIN_USER_PASSWORD:
+        description: 'Admin persona password for B2C ROPC'
+        required: false
+      E2E_TRADER_USER_EMAIL:
+        description: 'Trader persona email for B2C ROPC'
+        required: false
+      E2E_TRADER_USER_PASSWORD:
+        description: 'Trader persona password for B2C ROPC'
+        required: false
+      E2E_FIELDOPERATOR_USER_EMAIL:
+        description: 'FieldOperator persona email for B2C ROPC'
+        required: false
+      E2E_FIELDOPERATOR_USER_PASSWORD:
+        description: 'FieldOperator persona password for B2C ROPC'
+        required: false
+      E2E_MANAGEMENT_USER_EMAIL:
+        description: 'Management persona email for B2C ROPC'
+        required: false
+      E2E_MANAGEMENT_USER_PASSWORD:
+        description: 'Management persona password for B2C ROPC'
         required: false
 
 jobs:
@@ -350,10 +369,17 @@ jobs:
           E2E_SLOWMO: 0
           E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
-          E2E_TEST_USER_EMAIL: ${{ secrets.E2E_TEST_USER_EMAIL }}
-          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
           E2E_API_KEY: ${{ inputs.api_key }}
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
+          # NEW persona env vars
+          E2E_ADMIN_USER_EMAIL: ${{ secrets.E2E_ADMIN_USER_EMAIL }}
+          E2E_ADMIN_USER_PASSWORD: ${{ secrets.E2E_ADMIN_USER_PASSWORD }}
+          E2E_TRADER_USER_EMAIL: ${{ secrets.E2E_TRADER_USER_EMAIL }}
+          E2E_TRADER_USER_PASSWORD: ${{ secrets.E2E_TRADER_USER_PASSWORD }}
+          E2E_FIELDOPERATOR_USER_EMAIL: ${{ secrets.E2E_FIELDOPERATOR_USER_EMAIL }}
+          E2E_FIELDOPERATOR_USER_PASSWORD: ${{ secrets.E2E_FIELDOPERATOR_USER_PASSWORD }}
+          E2E_MANAGEMENT_USER_EMAIL: ${{ secrets.E2E_MANAGEMENT_USER_EMAIL }}
+          E2E_MANAGEMENT_USER_PASSWORD: ${{ secrets.E2E_MANAGEMENT_USER_PASSWORD }}
           # ConnectionStrings__Postgres set in previous step (only when non-empty)
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
@@ -413,8 +439,6 @@ jobs:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
-          E2E_TEST_USER_EMAIL: ${{ secrets.E2E_TEST_USER_EMAIL }}
-          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
           E2E_API_KEY: ${{ inputs.api_key }}
         run: |
           echo "🎭 Running Playwright tests against deployed environment"
