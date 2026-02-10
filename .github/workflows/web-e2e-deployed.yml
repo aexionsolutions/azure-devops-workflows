@@ -143,6 +143,30 @@ on:
         required: false
         type: string
         default: ''
+      
+      # B2C Configuration (required for real B2C auth in E2E tests)
+      b2c_authority:
+        description: 'Azure B2C authority URL (e.g., https://yourtenantname.b2clogin.com/yourtenantname.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN)'
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        description: 'Azure B2C application/client ID for ROPC flow'
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        description: 'Azure B2C scope (e.g., https://yourtenantname.onmicrosoft.com/api/access_as_user)'
+        required: false
+        type: string
+        default: ''
+      
+      # Generic E2E environment variables (pass any test-specific env vars as JSON)
+      e2e_env_vars:
+        description: 'Additional E2E environment variables as JSON string (e.g., {"E2E_ADMIN_EMAIL":"admin@test.com", "CUSTOM_VAR":"value"}). Secrets should be passed via e2e_secrets.'
+        required: false
+        type: string
+        default: '{}'
     
     secrets:
       E2E_AUTH_TOKEN:
@@ -154,30 +178,16 @@ on:
       DATABASE_CONNECTION_STRING:
         description: 'Database connection string (alternative to using Key Vault)'
         required: false
-      # NEW persona secrets
-      E2E_ADMIN_USER_EMAIL:
-        description: 'Admin persona email for B2C ROPC'
+      # B2C Client Secrets
+      B2C_CLIENT_SECRET:
+        description: 'Azure B2C client secret for ROPC flow (if required)'
         required: false
-      E2E_ADMIN_USER_PASSWORD:
-        description: 'Admin persona password for B2C ROPC'
+      B2C_SMOKE_CLIENT_SECRET:
+        description: 'Azure B2C smoke test client secret (alternative to B2C_CLIENT_SECRET)'
         required: false
-      E2E_TRADER_USER_EMAIL:
-        description: 'Trader persona email for B2C ROPC'
-        required: false
-      E2E_TRADER_USER_PASSWORD:
-        description: 'Trader persona password for B2C ROPC'
-        required: false
-      E2E_FIELDOPERATOR_USER_EMAIL:
-        description: 'FieldOperator persona email for B2C ROPC'
-        required: false
-      E2E_FIELDOPERATOR_USER_PASSWORD:
-        description: 'FieldOperator persona password for B2C ROPC'
-        required: false
-      E2E_MANAGEMENT_USER_EMAIL:
-        description: 'Management persona email for B2C ROPC'
-        required: false
-      E2E_MANAGEMENT_USER_PASSWORD:
-        description: 'Management persona password for B2C ROPC'
+      # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
+      e2e_secrets:
+        description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_PASSWORD":"secret123", "API_KEY":"key456"}). These will be masked in logs.'
         required: false
 
 jobs:
@@ -374,7 +384,8 @@ jobs:
           # B2C Configuration
           B2C_AUTHORITY: ${{ inputs.b2c_authority }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
-          B2C_CLIENT_SECRET: ${{ inputs.b2c_client_secret }}
+          B2C_CLIENT_SECRET: ${{ secrets.B2C_CLIENT_SECRET }}
+          B2C_SMOKE_CLIENT_SECRET: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
           # ConnectionStrings__Postgres set in previous step (only when non-empty)
         run: |
@@ -387,14 +398,18 @@ jobs:
           # Load additional E2E environment variables from JSON input
           if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
             echo "📦 Loading additional E2E environment variables..."
-            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              export "$key=$value"
+              echo "$key=$value" >> $GITHUB_ENV
+            done
           fi
           
           # Load additional E2E secrets from JSON input (and mask them)
-          if [ -n "${{ secrets.e2e_secrets }}" ]; then
+          if [ -n "${{ secrets.e2e_secrets }}" ] && [ "${{ secrets.e2e_secrets }}" != "{}" ]; then
             echo "🔐 Loading additional E2E secrets..."
             echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               echo "::add-mask::$value"
+              export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
             done
           fi
@@ -453,20 +468,25 @@ jobs:
           E2E_API_KEY: ${{ inputs.api_key }}
           B2C_AUTHORITY: ${{ inputs.b2c_authority }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
-          B2C_CLIENT_SECRET: ${{ inputs.b2c_client_secret }}
+          B2C_CLIENT_SECRET: ${{ secrets.B2C_CLIENT_SECRET }}
+          B2C_SMOKE_CLIENT_SECRET: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
         run: |
           # Load additional E2E environment variables
           if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
             echo "📦 Loading additional E2E environment variables..."
-            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              export "$key=$value"
+              echo "$key=$value" >> $GITHUB_ENV
+            done
           fi
           
           # Load additional E2E secrets
-          if [ -n "${{ secrets.e2e_secrets }}" ]; then
+          if [ -n "${{ secrets.e2e_secrets }}" ] && [ "${{ secrets.e2e_secrets }}" != "{}" ]; then
             echo "🔐 Loading additional E2E secrets..."
             echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               echo "::add-mask::$value"
+              export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
             done
           fi

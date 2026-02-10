@@ -546,14 +546,18 @@ jobs:
           # Load additional E2E environment variables from JSON input
           if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
             echo "📦 Loading additional E2E environment variables..."
-            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              export "$key=$value"
+              echo "$key=$value" >> $GITHUB_ENV
+            done
           fi
           
           # Load additional E2E secrets from JSON input (and mask them)
-          if [ -n "${{ secrets.e2e_secrets }}" ]; then
+          if [ -n "${{ secrets.e2e_secrets }}" ] && [ "${{ secrets.e2e_secrets }}" != "{}" ]; then
             echo "🔐 Loading additional E2E secrets..."
             echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               echo "::add-mask::$value"
+              export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
             done
           fi
@@ -655,14 +659,18 @@ jobs:
           # Load additional E2E environment variables
           if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
             echo "📦 Loading additional E2E environment variables..."
-            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              export "$key=$value"
+              echo "$key=$value" >> $GITHUB_ENV
+            done
           fi
           
           # Load additional E2E secrets
-          if [ -n "${{ secrets.e2e_secrets }}" ]; then
+          if [ -n "${{ secrets.e2e_secrets }}" ] && [ "${{ secrets.e2e_secrets }}" != "{}" ]; then
             echo "🔐 Loading additional E2E secrets..."
             echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               echo "::add-mask::$value"
+              export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
             done
           fi
