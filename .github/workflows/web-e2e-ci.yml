@@ -3,6 +3,11 @@ name: Reusable Web E2E CI
 on:
   workflow_call:
     inputs:
+      shared_ref:
+        description: 'DEPRECATED: No longer used. Kept for backwards compatibility with existing callers.'
+        required: false
+        type: string
+        default: ''
       git_ref:
         description: 'Git ref (tag/sha/branch) to test. Required for promote-release to ensure tests match the build version.'
         required: false
