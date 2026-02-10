@@ -364,7 +364,12 @@ jobs:
           echo "ℹ️  Removed appsettings files - using environment variables only"
           
           # Find API entry point (prefer .dll for framework-dependent, fallback to executable)
-          API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.dll" | head -n1)
+          # Look for .dll that has a matching .runtimeconfig.json (indicates it's an executable assembly)
+          API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.runtimeconfig.json" | sed 's/\.runtimeconfig\.json$/.dll/' | head -n1)
+          if [ ! -f "$API_DLL" ]; then
+            # Fallback: try to find *.Api.dll pattern
+            API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.Api.dll" | head -n1)
+          fi
           API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
           
           # Start API in background
