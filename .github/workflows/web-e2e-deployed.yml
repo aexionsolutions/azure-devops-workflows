@@ -371,15 +371,11 @@ jobs:
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
-          # NEW persona env vars
-          E2E_ADMIN_USER_EMAIL: ${{ secrets.E2E_ADMIN_USER_EMAIL }}
-          E2E_ADMIN_USER_PASSWORD: ${{ secrets.E2E_ADMIN_USER_PASSWORD }}
-          E2E_TRADER_USER_EMAIL: ${{ secrets.E2E_TRADER_USER_EMAIL }}
-          E2E_TRADER_USER_PASSWORD: ${{ secrets.E2E_TRADER_USER_PASSWORD }}
-          E2E_FIELDOPERATOR_USER_EMAIL: ${{ secrets.E2E_FIELDOPERATOR_USER_EMAIL }}
-          E2E_FIELDOPERATOR_USER_PASSWORD: ${{ secrets.E2E_FIELDOPERATOR_USER_PASSWORD }}
-          E2E_MANAGEMENT_USER_EMAIL: ${{ secrets.E2E_MANAGEMENT_USER_EMAIL }}
-          E2E_MANAGEMENT_USER_PASSWORD: ${{ secrets.E2E_MANAGEMENT_USER_PASSWORD }}
+          # B2C Configuration
+          B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
+          B2C_CLIENT_SECRET: ${{ inputs.b2c_client_secret }}
+          B2C_SCOPE: ${{ inputs.b2c_scope }}
           # ConnectionStrings__Postgres set in previous step (only when non-empty)
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
@@ -387,6 +383,21 @@ jobs:
           echo "   API URL: ${{ inputs.api_url }}"
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
+          
+          # Load additional E2E environment variables from JSON input
+          if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
+            echo "📦 Loading additional E2E environment variables..."
+            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+          fi
+          
+          # Load additional E2E secrets from JSON input (and mask them)
+          if [ -n "${{ secrets.e2e_secrets }}" ]; then
+            echo "🔐 Loading additional E2E secrets..."
+            echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              echo "::add-mask::$value"
+              echo "$key=$value" >> $GITHUB_ENV
+            done
+          fi
           
           # Strip @ prefix from Gherkin tags (e.g., @smoke -> smoke)
           FILTER="${{ inputs.test_filter }}"
@@ -440,7 +451,26 @@ jobs:
           API_BASE_URL: ${{ inputs.api_url }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
+          B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
+          B2C_CLIENT_SECRET: ${{ inputs.b2c_client_secret }}
+          B2C_SCOPE: ${{ inputs.b2c_scope }}
         run: |
+          # Load additional E2E environment variables
+          if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
+            echo "📦 Loading additional E2E environment variables..."
+            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+          fi
+          
+          # Load additional E2E secrets
+          if [ -n "${{ secrets.e2e_secrets }}" ]; then
+            echo "🔐 Loading additional E2E secrets..."
+            echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              echo "::add-mask::$value"
+              echo "$key=$value" >> $GITHUB_ENV
+            done
+          fi
+          
           echo "🎭 Running Playwright tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
           echo "   API URL: ${{ inputs.api_url }}"
