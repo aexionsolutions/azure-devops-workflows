@@ -424,7 +424,49 @@ jobs:
             exit 1
           fi
           
-          echo "✅ All required B2C secrets are configured"      
+          echo "✅ All required B2C secrets are configured"
+      
+      - name: Load E2E environment variables from JSON
+        env:
+          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
+        run: |
+          # Load additional E2E environment variables from JSON input
+          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
+            echo "📦 Loading additional E2E environment variables..."
+            # Validate JSON syntax
+            if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
+              echo "❌ Error: Invalid e2e_env_vars JSON syntax"
+              exit 1
+            fi
+            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+            done
+            echo "✅ E2E environment variables loaded"
+          else
+            echo "ℹ️  No additional E2E environment variables to load"
+          fi
+      
+      - name: Load E2E secrets from JSON
+        env:
+          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
+        run: |
+          # Load additional E2E secrets from JSON input (and mask them)
+          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
+            echo "🔐 Loading additional E2E secrets..."
+            # Validate JSON syntax
+            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
+              echo "❌ Error: Invalid e2e_secrets JSON syntax"
+              exit 1
+            fi
+            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+              echo "::add-mask::$value"
+              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+            done
+            echo "✅ E2E secrets loaded and masked"
+          else
+            echo "ℹ️  No additional E2E secrets to load"
+          fi
+      
       # Run Reqnroll E2E Tests
       - name: Run Reqnroll E2E tests
         if: inputs.e2e_project != ''
@@ -441,9 +483,7 @@ jobs:
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
           # B2C Configuration - set from secrets context in setup step above
           # B2C_AUTHORITY, B2C_CLIENT_ID, B2C_SCOPE, B2C_SMOKE_CLIENT_SECRET are available from env
-          # JSON inputs passed via env vars (safer than inline echo)
-          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
-          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
+          # Additional E2E env vars and secrets loaded in previous steps
           # ConnectionStrings__Postgres set in previous step (only when non-empty)
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
@@ -451,39 +491,6 @@ jobs:
           echo "   API URL: ${{ inputs.api_url }}"
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
-          
-          # Check for jq availability
-          if ! command -v jq &> /dev/null; then
-            echo "❌ Error: jq is not installed. Cannot parse JSON inputs."
-            exit 1
-          fi
-          
-          # Load additional E2E environment variables from JSON input
-          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
-            echo "📦 Loading additional E2E environment variables..."
-            # Validate JSON syntax
-            if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_env_vars JSON syntax"
-              exit 1
-            fi
-            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
-              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done
-          fi
-          
-          # Load additional E2E secrets from JSON input (and mask them)
-          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
-            echo "🔐 Loading additional E2E secrets..."
-            # Validate JSON syntax
-            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_secrets JSON syntax"
-              exit 1
-            fi
-            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
-              echo "::add-mask::$value"
-              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done
-          fi
           
           # Strip @ prefix from Gherkin tags (e.g., @smoke -> smoke)
           FILTER="${{ inputs.test_filter }}"
@@ -539,43 +546,8 @@ jobs:
           E2E_API_KEY: ${{ inputs.api_key }}
           # B2C Configuration - set from secrets context in setup step above
           # B2C_AUTHORITY, B2C_CLIENT_ID, B2C_SCOPE, B2C_SMOKE_CLIENT_SECRET are available from env
-          # JSON inputs passed via env vars (safer than inline echo)
-          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
-          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
+          # Additional E2E env vars and secrets loaded in previous steps
         run: |
-          # Check for jq availability
-          if ! command -v jq &> /dev/null; then
-            echo "❌ Error: jq is not installed. Cannot parse JSON inputs."
-            exit 1
-          fi
-          
-          # Load additional E2E environment variables
-          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
-            echo "📦 Loading additional E2E environment variables..."
-            # Validate JSON syntax
-            if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_env_vars JSON syntax"
-              exit 1
-            fi
-            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
-              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done
-          fi
-          
-          # Load additional E2E secrets
-          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
-            echo "🔐 Loading additional E2E secrets..."
-            # Validate JSON syntax
-            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_secrets JSON syntax"
-              exit 1
-            fi
-            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
-              echo "::add-mask::$value"
-              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done
-          fi
-          
           echo "🎭 Running Playwright tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
           echo "   API URL: ${{ inputs.api_url }}"
