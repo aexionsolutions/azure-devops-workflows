@@ -542,20 +542,29 @@ jobs:
           B2C_CLIENT_SECRET: ${{ secrets.B2C_CLIENT_SECRET }}
           B2C_SMOKE_CLIENT_SECRET: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
+          # JSON inputs passed via env vars (safer than inline echo)
+          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
+          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
         run: |
+          # Check for jq availability
+          if ! command -v jq &> /dev/null; then
+            echo "❌ Error: jq is not installed. Cannot parse JSON inputs."
+            exit 1
+          fi
+          
           # Load additional E2E environment variables from JSON input
-          if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
+          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
             echo "📦 Loading additional E2E environment variables..."
-            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
             done
           fi
           
           # Load additional E2E secrets from JSON input (and mask them)
-          if [ -n "${{ secrets.e2e_secrets }}" ] && [ "${{ secrets.e2e_secrets }}" != "{}" ]; then
+          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
             echo "🔐 Loading additional E2E secrets..."
-            echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               echo "::add-mask::$value"
               export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
@@ -655,20 +664,29 @@ jobs:
         env:
           BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           START_WEB_SERVER: "false"
+          # JSON inputs passed via env vars (safer than inline echo)
+          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
+          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
         run: |
+          # Check for jq availability
+          if ! command -v jq &> /dev/null; then
+            echo "❌ Error: jq is not installed. Cannot parse JSON inputs."
+            exit 1
+          fi
+          
           # Load additional E2E environment variables
-          if [ -n "${{ inputs.e2e_env_vars }}" ] && [ "${{ inputs.e2e_env_vars }}" != "{}" ]; then
+          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
             echo "📦 Loading additional E2E environment variables..."
-            echo '${{ inputs.e2e_env_vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
             done
           fi
           
           # Load additional E2E secrets
-          if [ -n "${{ secrets.e2e_secrets }}" ] && [ "${{ secrets.e2e_secrets }}" != "{}" ]; then
+          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
             echo "🔐 Loading additional E2E secrets..."
-            echo '${{ secrets.e2e_secrets }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
               echo "::add-mask::$value"
               export "$key=$value"
               echo "$key=$value" >> $GITHUB_ENV
