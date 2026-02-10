@@ -150,6 +150,23 @@ on:
         required: false
         type: string
         default: '{}'
+      
+      # B2C Configuration (non-sensitive, passed as inputs)
+      b2c_authority:
+        description: 'Azure B2C authority URL (e.g., https://yourtenantname.b2clogin.com/yourtenantname.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN)'
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        description: 'Azure B2C client ID for E2E tests'
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        description: 'Azure B2C API scope (e.g., https://yourtenantname.onmicrosoft.com/api/access_as_user)'
+        required: false
+        type: string
+        default: ''
     
     secrets:
       E2E_AUTH_TOKEN:
@@ -161,22 +178,26 @@ on:
       DATABASE_CONNECTION_STRING:
         description: 'Database connection string (alternative to using Key Vault)'
         required: false
-      # B2C secrets (required for B2C authentication in E2E tests)
-      AAD_B2C_AUTHORITY:
-        description: 'Azure B2C authority URL (e.g., https://yourtenantname.b2clogin.com/yourtenantname.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN)'
-        required: false
-      B2C_SMOKE_CLIENT_ID:
-        description: 'Azure B2C client ID for smoke test user ROPC flow'
-        required: false
-      AAD_B2C_API_SCOPE:
-        description: 'Azure B2C API scope (e.g., https://yourtenantname.onmicrosoft.com/api/access_as_user)'
-        required: false
-      B2C_SMOKE_CLIENT_SECRET:
-        description: 'Azure B2C client secret for smoke test user ROPC flow'
+      # B2C client secret (sensitive)
+      b2c_client_secret:
+        description: 'Azure B2C client secret for E2E test user ROPC flow'
         required: false
       # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
       e2e_secrets:
         description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_USER_EMAIL":"admin@test.com", "E2E_ADMIN_USER_PASSWORD":"secret123"}). These will be masked in logs.'
+        required: false
+      # Legacy B2C secrets (for backwards compatibility)
+      AAD_B2C_AUTHORITY:
+        description: 'Legacy: Azure B2C authority URL (prefer inputs.b2c_authority)'
+        required: false
+      B2C_SMOKE_CLIENT_ID:
+        description: 'Legacy: Azure B2C client ID (prefer inputs.b2c_client_id)'
+        required: false
+      AAD_B2C_API_SCOPE:
+        description: 'Legacy: Azure B2C API scope (prefer inputs.b2c_scope)'
+        required: false
+      B2C_SMOKE_CLIENT_SECRET:
+        description: 'Legacy: Azure B2C client secret (prefer secrets.b2c_client_secret)'
         required: false
 
 jobs:
@@ -246,12 +267,13 @@ jobs:
           echo "✅ Successfully retrieved connection string from Key Vault"
           echo "::add-mask::$CONN_STR"
           
-          # Use heredoc format for safe multi-line output
+          # Use heredoc format with random delimiter for safe multi-line output
+          DELIM="EOF_$(openssl rand -hex 8)"
           {
-            echo 'connection_string<<EOF'
+            echo "connection_string<<${DELIM}"
             echo "$CONN_STR"
-            echo 'EOF'
-          } >> $GITHUB_OUTPUT
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
       
       # Health Checks
       - name: Health Check - API
@@ -335,7 +357,15 @@ jobs:
           # Check if project uses Microsoft.Playwright
           if grep -q "Microsoft.Playwright" "${{ inputs.e2e_project }}"; then
             echo "📦 Installing Playwright browsers for Reqnroll tests..."
-            pwsh -c "cd $(dirname '${{ inputs.e2e_project }}'); dotnet build; pwsh bin/Debug/net*/playwright.ps1 install chromium --with-deps"
+            proj_dir="$(dirname "${{ inputs.e2e_project }}")"
+            dotnet build "${{ inputs.e2e_project }}" --nologo
+            # Find playwright.ps1 in any bin subfolder (handles Debug/Release + any target framework)
+            PLAYWRIGHT_SCRIPT=$(find "$proj_dir" -path "*/bin/*/*/playwright.ps1" 2>/dev/null | head -n1)
+            if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
+              pwsh "$PLAYWRIGHT_SCRIPT" install chromium --with-deps
+            else
+              echo "⚠️ playwright.ps1 not found; skipping browser install (Playwright may auto-install on first run)"
+            fi
           else
             echo "ℹ️ Reqnroll tests don't use Microsoft.Playwright - skipping browser installation"
           fi
@@ -350,81 +380,26 @@ jobs:
           
           if [ -n "$CONN_STR" ]; then
             echo "✅ Database connection string configured"
-            echo "::add-mask::$CONN_STR"
-            echo "ConnectionStrings__Postgres=$CONN_STR" >> $GITHUB_ENV
+            # Mask and write safely using heredoc (handles special chars/multiline)
+            while IFS= read -r line; do
+              [ -n "$line" ] && echo "::add-mask::$line"
+            done <<< "$CONN_STR"
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "ConnectionStrings__Postgres<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
+            # Also set Default for apps that use it
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "ConnectionStrings__Default<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
           else
-            echo "ℹ️ No database connection string provided; tests will use default/local configuration"
-          fi      
-      - name: Setup B2C secrets from secrets context
-        run: |
-          echo "🔐 Setting up B2C secrets from repository secrets..."
-          
-          # Read B2C secrets from secrets context and set as env vars
-          B2C_AUTH="${{ secrets.AAD_B2C_AUTHORITY }}"
-          B2C_CLIENT="${{ secrets.B2C_SMOKE_CLIENT_ID }}"
-          B2C_API_SCOPE="${{ secrets.AAD_B2C_API_SCOPE }}"
-          B2C_SECRET="${{ secrets.B2C_SMOKE_CLIENT_SECRET }}"
-          
-          # Mask sensitive values
-          if [ -n "$B2C_AUTH" ]; then
-            echo "::add-mask::$B2C_AUTH"
-            printf '%s=%s\n' "B2C_AUTHORITY" "$B2C_AUTH" >> "$GITHUB_ENV"
+            echo "ℹ️  No database connection string provided; tests will use default/local configuration"
           fi
-          
-          if [ -n "$B2C_CLIENT" ]; then
-            echo "::add-mask::$B2C_CLIENT"
-            printf '%s=%s\n' "B2C_CLIENT_ID" "$B2C_CLIENT" >> "$GITHUB_ENV"
-          fi
-          
-          if [ -n "$B2C_API_SCOPE" ]; then
-            echo "::add-mask::$B2C_API_SCOPE"
-            printf '%s=%s\n' "B2C_SCOPE" "$B2C_API_SCOPE" >> "$GITHUB_ENV"
-          fi
-          
-          if [ -n "$B2C_SECRET" ]; then
-            echo "::add-mask::$B2C_SECRET"
-            printf '%s=%s\n' "B2C_SMOKE_CLIENT_SECRET" "$B2C_SECRET" >> "$GITHUB_ENV"
-          fi
-          
-          echo "✅ B2C secrets configured"
-      
-      - name: Validate B2C configuration
-        run: |
-          echo "🔍 Validating B2C configuration..."
-          
-          MISSING_SECRETS=()
-          
-          if [ -z "${B2C_AUTHORITY:-}" ]; then
-            MISSING_SECRETS+=("B2C_AUTHORITY (from AAD_B2C_AUTHORITY secret)")
-          fi
-          
-          if [ -z "${B2C_CLIENT_ID:-}" ]; then
-            MISSING_SECRETS+=("B2C_CLIENT_ID (from B2C_SMOKE_CLIENT_ID secret)")
-          fi
-          
-          if [ -z "${B2C_SCOPE:-}" ]; then
-            MISSING_SECRETS+=("B2C_SCOPE (from AAD_B2C_API_SCOPE secret)")
-          fi
-          
-          if [ -z "${B2C_SMOKE_CLIENT_SECRET:-}" ]; then
-            MISSING_SECRETS+=("B2C_SMOKE_CLIENT_SECRET secret")
-          fi
-          
-          if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
-            echo "❌ Error: Missing required B2C secrets for E2E tests:"
-            for secret in "${MISSING_SECRETS[@]}"; do
-              echo "   - $secret"
-            done
-            echo ""
-            echo "Please configure the following repository secrets:"
-            echo "   - AAD_B2C_AUTHORITY (Azure B2C authority URL)"
-            echo "   - B2C_SMOKE_CLIENT_ID (Azure B2C client ID)"
-            echo "   - AAD_B2C_API_SCOPE (Azure B2C API scope)"
-            echo "   - B2C_SMOKE_CLIENT_SECRET (Azure B2C client secret)"
-            exit 1
-          fi
-          
-          echo "✅ All required B2C secrets are configured"
       
       - name: Load E2E environment variables from JSON
         env:
@@ -438,10 +413,20 @@ jobs:
               echo "❌ Error: Invalid e2e_env_vars JSON syntax"
               exit 1
             fi
-            # Use process substitution to avoid subshell issue
-            while IFS='=' read -r key value; do
-              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done < <(echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+            # Write to temp file, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+            TEMP_FILE=$(mktemp)
+            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+            echo "Loaded environment variable keys:"
+            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+            while IFS=$'\t' read -r key value; do
+              DELIM="EOF_$(openssl rand -hex 8)"
+              {
+                echo "${key}<<${DELIM}"
+                echo "${value}"
+                echo "${DELIM}"
+              } >> "$GITHUB_ENV"
+            done < "$TEMP_FILE"
+            rm -f "$TEMP_FILE"
             echo "✅ E2E environment variables loaded"
           else
             echo "ℹ️  No additional E2E environment variables to load"
@@ -459,11 +444,30 @@ jobs:
               echo "❌ Error: Invalid e2e_secrets JSON syntax"
               exit 1
             fi
-            # Use process substitution to avoid subshell issue with pipe
-            while IFS='=' read -r key value; do
-              echo "::add-mask::$value"
-              printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done < <(echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+            # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+            TEMP_FILE=$(mktemp)
+            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+            echo "Loaded secret keys:"
+            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+            while IFS=$'\t' read -r key value; do
+              # Mask secrets: full value first (for single-line), then line-by-line (for multi-line)
+              if [[ "$value" != *$'\n'* ]]; then
+                # Single-line secret: mask the whole value
+                echo "::add-mask::$value"
+              else
+                # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
+                while IFS= read -r line; do
+                  [ -n "$line" ] && echo "::add-mask::$line"
+                done <<< "$value"
+              fi
+              DELIM="EOF_$(openssl rand -hex 8)"
+              {
+                echo "${key}<<${DELIM}"
+                echo "${value}"
+                echo "${DELIM}"
+              } >> "$GITHUB_ENV"
+            done < "$TEMP_FILE"
+            rm -f "$TEMP_FILE"
             echo "✅ E2E secrets loaded and masked"
           else
             echo "ℹ️  No additional E2E secrets to load"
@@ -483,14 +487,51 @@ jobs:
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
-          # B2C Configuration - set from secrets context in setup step above
-          # B2C_AUTHORITY, B2C_CLIENT_ID, B2C_SCOPE, B2C_SMOKE_CLIENT_SECRET are available from env
-          # Additional E2E env vars and secrets loaded in previous steps
-          # ConnectionStrings__Postgres set in previous step (only when non-empty)
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded from JSON in previous steps
+          # ConnectionStrings__Postgres and ConnectionStrings__Default set in previous step (only when non-empty)
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
           echo "   API URL: ${{ inputs.api_url }}"
+          
+          # Log B2C configuration source (helps debug fallback paths without leaking secrets)
+          echo "🔐 B2C Configuration:"
+          if [ -n "${{ inputs.b2c_authority }}" ]; then
+            echo "  ✅ B2C_AUTHORITY from inputs.b2c_authority"
+          elif [ -n "${{ secrets.AAD_B2C_AUTHORITY }}" ]; then
+            echo "  📖 B2C_AUTHORITY from legacy secrets.AAD_B2C_AUTHORITY"
+          else
+            echo "  ⚠️ B2C_AUTHORITY not configured"
+          fi
+          
+          if [ -n "${{ inputs.b2c_client_id }}" ]; then
+            echo "  ✅ B2C_CLIENT_ID from inputs.b2c_client_id"
+          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_ID }}" ]; then
+            echo "  📖 B2C_CLIENT_ID from legacy secrets.B2C_SMOKE_CLIENT_ID"
+          else
+            echo "  ⚠️ B2C_CLIENT_ID not configured"
+          fi
+          
+          if [ -n "${{ inputs.b2c_scope }}" ]; then
+            echo "  ✅ B2C_SCOPE from inputs.b2c_scope"
+          elif [ -n "${{ secrets.AAD_B2C_API_SCOPE }}" ]; then
+            echo "  📖 B2C_SCOPE from legacy secrets.AAD_B2C_API_SCOPE"
+          else
+            echo "  ⚠️ B2C_SCOPE not configured"
+          fi
+          
+          if [ -n "${{ secrets.b2c_client_secret }}" ]; then
+            echo "  ✅ B2C_CLIENT_SECRET from secrets.b2c_client_secret"
+          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_SECRET }}" ]; then
+            echo "  📖 B2C_CLIENT_SECRET from legacy secrets.B2C_SMOKE_CLIENT_SECRET"
+          else
+            echo "  ⚠️ B2C_CLIENT_SECRET not configured"
+          fi
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
           
@@ -546,9 +587,12 @@ jobs:
           API_BASE_URL: ${{ inputs.api_url }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
-          # B2C Configuration - set from secrets context in setup step above
-          # B2C_AUTHORITY, B2C_CLIENT_ID, B2C_SCOPE, B2C_SMOKE_CLIENT_SECRET are available from env
-          # Additional E2E env vars and secrets loaded in previous steps
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded from JSON in previous steps
         run: |
           echo "🎭 Running Playwright tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
