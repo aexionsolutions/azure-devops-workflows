@@ -134,7 +134,7 @@ on:
         required: false
       # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
       e2e_secrets:
-        description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_PASSWORD":"secret123", "API_KEY":"key456"}). These will be masked in logs.'
+        description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_USER_EMAIL":"admin@test.com", "E2E_ADMIN_USER_PASSWORD":"secret123"}). These will be masked in logs.'
         required: false
 
 env:
@@ -594,9 +594,10 @@ jobs:
               echo "❌ Error: Invalid e2e_env_vars JSON syntax"
               exit 1
             fi
-            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+            # Use process substitution to avoid subshell issue
+            while IFS='=' read -r key value; do
               printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done
+            done < <(echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
             echo "✅ E2E environment variables loaded"
           else
             echo "ℹ️  No additional E2E environment variables to load"
@@ -608,19 +609,20 @@ jobs:
         run: |
           # Load additional E2E secrets from JSON input (and mask them)
           if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
-            echo "🔐 Loading additional E2E secrets..."
+            echo "🔐 Loading additional E2E secrets from JSON..."
             # Validate JSON syntax
             if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
               echo "❌ Error: Invalid e2e_secrets JSON syntax"
               exit 1
             fi
-            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"' | while IFS='=' read -r key value; do
+            # Use process substitution to avoid subshell issue with pipe
+            while IFS='=' read -r key value; do
               echo "::add-mask::$value"
               printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
-            done
-            echo "✅ E2E secrets loaded and masked"
+            done < <(echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+            echo "✅ E2E secrets from JSON loaded and masked"
           else
-            echo "ℹ️  No additional E2E secrets to load"
+            echo "ℹ️  No additional E2E secrets JSON to load"
           fi
 
       - name: Run Reqnroll E2E tests
