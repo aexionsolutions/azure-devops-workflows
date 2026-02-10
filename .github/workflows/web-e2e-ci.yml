@@ -104,12 +104,60 @@ on:
         required: false
         type: boolean
         default: true
+      # B2C Configuration (required for real B2C auth in E2E tests)
+      b2c_authority:
+        description: 'Azure B2C authority URL (e.g., https://yourtenantname.b2clogin.com/yourtenantname.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN)'
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        description: 'Azure B2C application/client ID for ROPC flow'
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        description: 'Azure B2C scope (e.g., https://yourtenantname.onmicrosoft.com/api/access_as_user)'
+        required: false
+        type: string
+        default: ''
     secrets:
       E2E_JWT_SIGNING_KEY:
         description: 'JWT signing key for E2E authentication (generated if not provided)'
         required: false
       E2E_JWT_AUDIENCE:
         description: 'JWT audience for E2E tests (defaults to e2e-api if not provided)'
+        required: false
+      # B2C Client Secret
+      B2C_CLIENT_SECRET:
+        description: 'Azure B2C client secret for ROPC flow (if required)'
+        required: false
+      B2C_SMOKE_CLIENT_SECRET:
+        description: 'Azure B2C smoke test client secret (alternative to B2C_CLIENT_SECRET)'
+        required: false
+      # Persona secrets for B2C ROPC authentication
+      E2E_ADMIN_USER_EMAIL:
+        description: 'Admin persona email for B2C ROPC'
+        required: false
+      E2E_ADMIN_USER_PASSWORD:
+        description: 'Admin persona password for B2C ROPC'
+        required: false
+      E2E_TRADER_USER_EMAIL:
+        description: 'Trader persona email for B2C ROPC'
+        required: false
+      E2E_TRADER_USER_PASSWORD:
+        description: 'Trader persona password for B2C ROPC'
+        required: false
+      E2E_FIELDOPERATOR_USER_EMAIL:
+        description: 'FieldOperator persona email for B2C ROPC'
+        required: false
+      E2E_FIELDOPERATOR_USER_PASSWORD:
+        description: 'FieldOperator persona password for B2C ROPC'
+        required: false
+      E2E_MANAGEMENT_USER_EMAIL:
+        description: 'Management persona email for B2C ROPC'
+        required: false
+      E2E_MANAGEMENT_USER_PASSWORD:
+        description: 'Management persona password for B2C ROPC'
         required: false
 
 env:
@@ -501,6 +549,21 @@ jobs:
           E2E_HEADLESS: "true"
           E2E_SLOWMO: "0"
           E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video && 'true' || 'false' }}
+          # B2C Configuration for real B2C auth in E2E tests
+          B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
+          B2C_CLIENT_SECRET: ${{ secrets.B2C_CLIENT_SECRET }}
+          B2C_SMOKE_CLIENT_SECRET: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
+          B2C_SCOPE: ${{ inputs.b2c_scope }}
+          # Persona credentials for B2C ROPC authentication
+          E2E_ADMIN_USER_EMAIL: ${{ secrets.E2E_ADMIN_USER_EMAIL }}
+          E2E_ADMIN_USER_PASSWORD: ${{ secrets.E2E_ADMIN_USER_PASSWORD }}
+          E2E_TRADER_USER_EMAIL: ${{ secrets.E2E_TRADER_USER_EMAIL }}
+          E2E_TRADER_USER_PASSWORD: ${{ secrets.E2E_TRADER_USER_PASSWORD }}
+          E2E_FIELDOPERATOR_USER_EMAIL: ${{ secrets.E2E_FIELDOPERATOR_USER_EMAIL }}
+          E2E_FIELDOPERATOR_USER_PASSWORD: ${{ secrets.E2E_FIELDOPERATOR_USER_PASSWORD }}
+          E2E_MANAGEMENT_USER_EMAIL: ${{ secrets.E2E_MANAGEMENT_USER_EMAIL }}
+          E2E_MANAGEMENT_USER_PASSWORD: ${{ secrets.E2E_MANAGEMENT_USER_PASSWORD }}
         run: |
           echo "🧪 Running Reqnroll/SpecFlow E2E tests..."
           echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
