@@ -16,11 +16,6 @@ on:
         required: false
         type: string
         default: ''
-      e2e_runner:
-        description: 'Runner label for E2E job(s). Allowed: ubuntu-latest, windows-latest.'
-        required: false
-        type: string
-        default: 'ubuntu-latest'
       
       # Deployed Environment URLs
       web_url:
@@ -208,35 +203,18 @@ on:
 jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
-    runs-on: ${{ inputs.e2e_runner }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     # Grant permissions for Azure workload identity (OIDC)
     permissions:
       id-token: write
       contents: read
-
-    defaults:
-      run:
-        shell: bash
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.git_ref || github.ref }}
-
-      - name: Validate e2e_runner input
-        run: |
-          case "${{ inputs.e2e_runner }}" in
-            ubuntu-latest|windows-latest)
-              echo "✅ e2e_runner is valid: ${{ inputs.e2e_runner }}"
-              ;;
-            *)
-              echo "❌ Invalid e2e_runner: ${{ inputs.e2e_runner }}"
-              echo "   Allowed values: ubuntu-latest, windows-latest"
-              exit 1
-              ;;
-          esac
       
       # Azure Login (if Key Vault is used)
       - name: Azure Login (Workload Identity)
@@ -369,11 +347,7 @@ jobs:
         working-directory: ${{ inputs.web_directory }}
         run: |
           npm ci
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            npx playwright install --with-deps chromium
-          else
-            npx playwright install chromium
-          fi
+          npx playwright install --with-deps
       
       # Install Playwright browsers for Reqnroll tests (if using Microsoft.Playwright)
       - name: Install Playwright for Reqnroll
@@ -388,11 +362,7 @@ jobs:
             # Find playwright.ps1 in any bin subfolder (handles Debug/Release + any target framework)
             PLAYWRIGHT_SCRIPT=$(find "$proj_dir" -path "*/bin/*/*/playwright.ps1" 2>/dev/null | head -n1)
             if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
-              if [ "${{ runner.os }}" = "Linux" ]; then
-                pwsh "$PLAYWRIGHT_SCRIPT" install chromium --with-deps
-              else
-                pwsh "$PLAYWRIGHT_SCRIPT" install chromium
-              fi
+              pwsh "$PLAYWRIGHT_SCRIPT" install chromium --with-deps
             else
               echo "⚠️ playwright.ps1 not found; skipping browser install (Playwright may auto-install on first run)"
             fi
@@ -722,7 +692,6 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Runner: \`${{ inputs.e2e_runner }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Node.js: \`${{ inputs.node_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- .NET: \`${{ inputs.dotnet_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Video recording: \`${{ inputs.e2e_enable_video }}\`" >> $GITHUB_STEP_SUMMARY

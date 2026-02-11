@@ -29,11 +29,6 @@ on:
         required: false
         type: string
         default: ''
-      e2e_runner:
-        description: 'Runner label for E2E job(s). Allowed: ubuntu-latest, windows-latest.'
-        required: false
-        type: string
-        default: 'ubuntu-latest'
       node_version:
         description: 'Node.js version'
         required: false
@@ -209,7 +204,7 @@ jobs:
   # E2E tests with full stack (API + Web + DB + Azurite)
   web-e2e:
     name: E2E Tests
-    runs-on: ${{ inputs.e2e_runner }}
+    runs-on: ubuntu-latest
     needs: build-api
     
     # Docker services for E2E environment
@@ -237,7 +232,6 @@ jobs:
     
     defaults:
       run:
-        shell: bash
         working-directory: caller
     
     steps:
@@ -246,19 +240,6 @@ jobs:
         with:
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
-
-      - name: Validate e2e_runner input
-        run: |
-          case "${{ inputs.e2e_runner }}" in
-            ubuntu-latest|windows-latest)
-              echo "✅ e2e_runner is valid: ${{ inputs.e2e_runner }}"
-              ;;
-            *)
-              echo "❌ Invalid e2e_runner: ${{ inputs.e2e_runner }}"
-              echo "   Allowed values: ubuntu-latest, windows-latest"
-              exit 1
-              ;;
-          esac
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -485,11 +466,7 @@ jobs:
         working-directory: caller/${{ inputs.web_directory }}
         run: |
           echo "📦 Installing Playwright browsers..."
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            npx playwright install --with-deps chromium
-          else
-            npx playwright install chromium
-          fi
+          npx playwright install --with-deps chromium
 
       - name: Build Next.js app
         working-directory: caller/${{ inputs.web_directory }}
@@ -721,11 +698,7 @@ jobs:
           PLAYWRIGHT_SCRIPT=$(find . -path "*/bin/Release/*/playwright.ps1" | head -n1)
           if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
             echo "📦 Installing Playwright browsers for .NET..."
-            if [ "${{ runner.os }}" = "Linux" ]; then
-              pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
-            else
-              pwsh "$PLAYWRIGHT_SCRIPT" install
-            fi
+            pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
           fi
           
           # Run tests with retry logic
@@ -922,7 +895,6 @@ jobs:
           echo "## 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Runner: \`${{ inputs.e2e_runner }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Preset: ${{ inputs.repo_preset || 'none (using explicit inputs)' }}" >> $GITHUB_STEP_SUMMARY
           echo "- API: http://localhost:${{ steps.config.outputs.api_port }}" >> $GITHUB_STEP_SUMMARY
           echo "- Web: http://localhost:${{ steps.config.outputs.web_port }}" >> $GITHUB_STEP_SUMMARY

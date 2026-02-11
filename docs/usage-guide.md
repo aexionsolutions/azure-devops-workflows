@@ -305,7 +305,6 @@ jobs:
       api_port: 5100                             # Default: 5100
       web_port: 3100                             # Default: 3100
       enable_azurite: true                       # Default: true
-      e2e_runner: ubuntu-latest                  # Default: ubuntu-latest (or windows-latest)
       
       # Database Seeding
       seed_data_script: tests/e2e-seed-data.sql # Default: '' (no seeding)
@@ -459,7 +458,6 @@ jobs:
       # Infrastructure
       node_version: '20'
       dotnet_version: '10.0.x'
-      e2e_runner: ubuntu-latest                  # Default: ubuntu-latest (or windows-latest)
       
       # Authentication (if required)
       api_key: ${{ secrets.STAGING_API_KEY }}
