@@ -3,11 +3,6 @@ name: Reusable Web E2E CI
 on:
   workflow_call:
     inputs:
-      shared_ref:
-        description: 'Ref (tag/sha/branch) of aexionsolutions/azure-devops-workflows to checkout into ./shared. Set this to the same @ref used in the calling repo. If omitted, defaults to main.'
-        required: false
-        type: string
-        default: ''
       git_ref:
         description: 'Git ref (tag/sha/branch) to test. Required for promote-release to ensure tests match the build version.'
         required: false
@@ -34,6 +29,11 @@ on:
         required: false
         type: string
         default: ''
+      e2e_runner:
+        description: 'Runner label for E2E job(s). Allowed: ubuntu-latest, windows-latest.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
       node_version:
         description: 'Node.js version'
         required: false
@@ -104,6 +104,31 @@ on:
         required: false
         type: boolean
         default: true
+      
+      # Generic E2E environment variables (pass any test-specific env vars as JSON)
+      e2e_env_vars:
+        description: 'Additional E2E environment variables as JSON string (e.g., {"E2E_ADMIN_EMAIL":"admin@test.com", "CUSTOM_VAR":"value"}). Secrets should be passed via e2e_secrets.'
+        required: false
+        type: string
+        default: '{}'
+      
+      # B2C Configuration (non-sensitive, passed as inputs)
+      b2c_authority:
+        description: 'Azure B2C authority URL (e.g., https://yourtenantname.b2clogin.com/yourtenantname.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN)'
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        description: 'Azure B2C client ID for E2E tests'
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        description: 'Azure B2C API scope (e.g., https://yourtenantname.onmicrosoft.com/api/access_as_user)'
+        required: false
+        type: string
+        default: ''
+    
     secrets:
       E2E_JWT_SIGNING_KEY:
         description: 'JWT signing key for E2E authentication (generated if not provided)'
@@ -111,10 +136,35 @@ on:
       E2E_JWT_AUDIENCE:
         description: 'JWT audience for E2E tests (defaults to e2e-api if not provided)'
         required: false
+      # B2C client secret (sensitive)
+      b2c_client_secret:
+        description: 'Azure B2C client secret for E2E test user ROPC flow'
+        required: false
+      # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
+      e2e_secrets:
+        description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_USER_EMAIL":"admin@test.com", "E2E_ADMIN_USER_PASSWORD":"secret123"}). These will be masked in logs.'
+        required: false
+      # Legacy B2C secrets (for backwards compatibility)
+      AAD_B2C_AUTHORITY:
+        description: 'Legacy: Azure B2C authority URL (prefer inputs.b2c_authority)'
+        required: false
+      B2C_SMOKE_CLIENT_ID:
+        description: 'Legacy: Azure B2C client ID (prefer inputs.b2c_client_id)'
+        required: false
+      AAD_B2C_API_SCOPE:
+        description: 'Legacy: Azure B2C API scope (prefer inputs.b2c_scope)'
+        required: false
+      B2C_SMOKE_CLIENT_SECRET:
+        description: 'Legacy: Azure B2C client secret (prefer secrets.b2c_client_secret)'
+        required: false
+      # Postgres password (optional secret alternative to plaintext input)
+      POSTGRES_PASSWORD:
+        description: 'PostgreSQL password (prefer over plaintext inputs.postgres_password)'
+        required: false
 
 env:
   CALLER_WORKDIR: caller
-  POSTGRES_PASSWORD: ${{ inputs.postgres_password }}
+  POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD != '' && secrets.POSTGRES_PASSWORD || inputs.postgres_password }}
 
 jobs:
   # Build API once, reuse in E2E job
@@ -159,7 +209,7 @@ jobs:
   # E2E tests with full stack (API + Web + DB + Azurite)
   web-e2e:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.e2e_runner }}
     needs: build-api
     
     # Docker services for E2E environment
@@ -187,21 +237,28 @@ jobs:
     
     defaults:
       run:
+        shell: bash
         working-directory: caller
     
     steps:
-      - name: Checkout shared workflows
-        uses: actions/checkout@v4
-        with:
-          repository: aexionsolutions/azure-devops-workflows
-          ref: ${{ inputs.shared_ref || 'main' }}
-          path: shared
-
       - name: Checkout calling repo
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
+
+      - name: Validate e2e_runner input
+        run: |
+          case "${{ inputs.e2e_runner }}" in
+            ubuntu-latest|windows-latest)
+              echo "✅ e2e_runner is valid: ${{ inputs.e2e_runner }}"
+              ;;
+            *)
+              echo "❌ Invalid e2e_runner: ${{ inputs.e2e_runner }}"
+              echo "   Allowed values: ubuntu-latest, windows-latest"
+              exit 1
+              ;;
+          esac
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -227,24 +284,32 @@ jobs:
           
           if [ "$PRESET" = "tems" ]; then
             echo "ℹ️  Applying TEMS preset configuration"
-            # Note: database_port must be passed explicitly (can't be in preset due to GH Actions services limitation)
+            # Note: Presets only set ports (not postgres_db or database_port)
+            # Services start before steps run, so they read inputs directly
             echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
             echo "api_port=5000" >> $GITHUB_OUTPUT
             echo "web_port=3000" >> $GITHUB_OUTPUT
-            echo "postgres_db=Tems_test" >> $GITHUB_OUTPUT
           elif [ "$PRESET" = "ravenxpress" ]; then
             echo "ℹ️  Applying RavenXpress preset configuration"
             echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
             echo "api_port=5100" >> $GITHUB_OUTPUT
             echo "web_port=3100" >> $GITHUB_OUTPUT
-            echo "postgres_db=e2e_test" >> $GITHUB_OUTPUT
           else
             # Use explicit inputs or defaults
             echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
             echo "api_port=${{ inputs.api_port }}" >> $GITHUB_OUTPUT
             echo "web_port=${{ inputs.web_port }}" >> $GITHUB_OUTPUT
-            echo "postgres_db=${{ inputs.postgres_db }}" >> $GITHUB_OUTPUT
           fi
+      
+      - name: Validate Postgres password source
+        run: |
+          # Prevent plaintext real passwords in workflow YAML
+          if [ -z "${{ secrets.POSTGRES_PASSWORD }}" ] && [ "${{ inputs.postgres_password }}" != "test_password_e2e_123" ]; then
+            echo "❌ Do not pass real DB passwords via inputs.postgres_password."
+            echo "   Use secrets.POSTGRES_PASSWORD instead."
+            exit 1
+          fi
+          echo "✅ Postgres password source validated"
 
       - name: Prepare E2E JWT configuration
         id: jwt
@@ -302,8 +367,8 @@ jobs:
           ASPNETCORE_URLS: http://0.0.0.0:${{ steps.config.outputs.api_port }}
           SkipDatabaseMigrations: "false"
           ENABLE_TEST_MIGRATIONS: "true"
-          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
           E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
           E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
           E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
@@ -313,23 +378,35 @@ jobs:
         run: |
           echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
           
-          # Find API binary (don't require it to be executable yet)
-          API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
-          if [ -z "$API_BINARY" ]; then
-            echo "❌ API executable not found in api-publish/"
-            ls -la api-publish/
-            exit 1
-          fi
-          chmod +x "$API_BINARY"
-          
           # Remove appsettings files to prevent connection string conflicts
           rm -f api-publish/appsettings.*.json
           echo "ℹ️  Removed appsettings files - using environment variables only"
           
+          # Find API entry point (prefer .dll for framework-dependent, fallback to executable)
+          # Look for .dll that has a matching .runtimeconfig.json (indicates it's an executable assembly)
+          API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.runtimeconfig.json" | sed 's/\.runtimeconfig\.json$/.dll/' | head -n1)
+          if [ ! -f "$API_DLL" ]; then
+            # Fallback: try to find *.Api.dll pattern
+            API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.Api.dll" | head -n1)
+          fi
+          API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
+          
           # Start API in background
           cd api-publish
-          ./${API_BINARY##*/} > ../api.log 2>&1 &
-          API_PID=$!
+          if [ -n "$API_DLL" ]; then
+            echo "ℹ️  Starting framework-dependent API: dotnet ${API_DLL##*/}"
+            dotnet "${API_DLL##*/}" > ../api.log 2>&1 &
+            API_PID=$!
+          elif [ -n "$API_BINARY" ]; then
+            echo "ℹ️  Starting self-contained API: ${API_BINARY##*/}"
+            chmod +x "$API_BINARY"
+            "./${API_BINARY##*/}" > ../api.log 2>&1 &
+            API_PID=$!
+          else
+            echo "❌ No API entry point found in api-publish/"
+            ls -la .
+            exit 1
+          fi
           cd ..
           echo "API_PID=$API_PID" >> $GITHUB_ENV
           echo "ℹ️  API process started (PID: $API_PID)"
@@ -363,8 +440,8 @@ jobs:
           # Verify critical tables exist
           for i in {1..15}; do
             TABLE_COUNT=$(PGPASSWORD=${{ env.POSTGRES_PASSWORD }} psql -h localhost -p ${{ steps.config.outputs.database_port }} \
-              -U ${{ inputs.postgres_user }} -d ${{ steps.config.outputs.postgres_db }} -t \
-              -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>&1 | tr -d ' ')
+              -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }} -t -A -q \
+              -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>&1)
             
             if [ "$TABLE_COUNT" -gt 0 ]; then
               echo "✅ Database schema initialized ($TABLE_COUNT tables found)"
@@ -388,7 +465,7 @@ jobs:
           
           psql -h localhost -p ${{ steps.config.outputs.database_port }} \
             -U ${{ inputs.postgres_user }} \
-            -d ${{ steps.config.outputs.postgres_db }} \
+            -d ${{ inputs.postgres_db }} \
             -f "${{ inputs.seed_data_script }}"
           
           echo "✅ Test data seeded successfully"
@@ -408,7 +485,11 @@ jobs:
         working-directory: caller/${{ inputs.web_directory }}
         run: |
           echo "📦 Installing Playwright browsers..."
-          npx playwright install --with-deps chromium
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            npx playwright install --with-deps chromium
+          else
+            npx playwright install chromium
+          fi
 
       - name: Build Next.js app
         working-directory: caller/${{ inputs.web_directory }}
@@ -485,6 +566,79 @@ jobs:
             echo "❌ Web health check failed"
             exit 1
           fi
+      
+      - name: Load E2E environment variables from JSON
+        env:
+          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
+        run: |
+          # Load additional E2E environment variables from JSON input
+          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
+            echo "📦 Loading additional E2E environment variables..."
+            # Validate JSON syntax
+            if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
+              echo "❌ Error: Invalid e2e_env_vars JSON syntax"
+              exit 1
+            fi
+            # Write to temp file, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+            TEMP_FILE=$(mktemp)
+            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+            echo "Loaded environment variable keys:"
+            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+            while IFS=$'\t' read -r key value; do
+              DELIM="EOF_$(openssl rand -hex 8)"
+              {
+                echo "${key}<<${DELIM}"
+                echo "${value}"
+                echo "${DELIM}"
+              } >> "$GITHUB_ENV"
+            done < "$TEMP_FILE"
+            rm -f "$TEMP_FILE"
+            echo "✅ E2E environment variables loaded"
+          else
+            echo "ℹ️  No additional E2E environment variables to load"
+          fi
+      
+      - name: Load E2E secrets from JSON
+        env:
+          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
+        run: |
+          # Load additional E2E secrets from JSON input (and mask them)
+          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
+            echo "🔐 Loading additional E2E secrets from JSON..."
+            # Validate JSON syntax
+            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
+              echo "❌ Error: Invalid e2e_secrets JSON syntax"
+              exit 1
+            fi
+            # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+            TEMP_FILE=$(mktemp)
+            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+            COUNT=$(wc -l < "$TEMP_FILE")
+            echo "Loaded secret keys:"
+            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+            while IFS=$'\t' read -r key value; do
+              # Mask secrets: full value first (for single-line), then line-by-line (for multi-line)
+              if [[ "$value" != *$'\n'* ]]; then
+                # Single-line secret: mask the whole value
+                echo "::add-mask::$value"
+              else
+                # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
+                while IFS= read -r line; do
+                  [ -n "$line" ] && echo "::add-mask::$line"
+                done <<< "$value"
+              fi
+              DELIM="EOF_$(openssl rand -hex 8)"
+              {
+                echo "${key}<<${DELIM}"
+                echo "${value}"
+                echo "${DELIM}"
+              } >> "$GITHUB_ENV"
+            done < "$TEMP_FILE"
+            rm -f "$TEMP_FILE"
+            echo "✅ E2E secrets from JSON loaded and masked ($COUNT variables)"
+          else
+            echo "ℹ️  No additional E2E secrets JSON to load"
+          fi
 
       - name: Run Reqnroll E2E tests
         if: inputs.e2e_project != ''
@@ -492,18 +646,58 @@ jobs:
           RUN_E2E: "true"
           E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
-          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ steps.config.outputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
           E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
           E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
           E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
           E2E_HEADLESS: "true"
           E2E_SLOWMO: "0"
           E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video && 'true' || 'false' }}
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded from JSON in previous steps
         run: |
           echo "🧪 Running Reqnroll/SpecFlow E2E tests..."
           echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
+          
+          # Log B2C configuration source (helps debug fallback paths without leaking secrets)
+          echo "🔐 B2C Configuration:"
+          if [ -n "${{ inputs.b2c_authority }}" ]; then
+            echo "  ✅ B2C_AUTHORITY from inputs.b2c_authority"
+          elif [ -n "${{ secrets.AAD_B2C_AUTHORITY }}" ]; then
+            echo "  📖 B2C_AUTHORITY from legacy secrets.AAD_B2C_AUTHORITY"
+          else
+            echo "  ⚠️ B2C_AUTHORITY not configured"
+          fi
+          
+          if [ -n "${{ inputs.b2c_client_id }}" ]; then
+            echo "  ✅ B2C_CLIENT_ID from inputs.b2c_client_id"
+          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_ID }}" ]; then
+            echo "  📖 B2C_CLIENT_ID from legacy secrets.B2C_SMOKE_CLIENT_ID"
+          else
+            echo "  ⚠️ B2C_CLIENT_ID not configured"
+          fi
+          
+          if [ -n "${{ inputs.b2c_scope }}" ]; then
+            echo "  ✅ B2C_SCOPE from inputs.b2c_scope"
+          elif [ -n "${{ secrets.AAD_B2C_API_SCOPE }}" ]; then
+            echo "  📖 B2C_SCOPE from legacy secrets.AAD_B2C_API_SCOPE"
+          else
+            echo "  ⚠️ B2C_SCOPE not configured"
+          fi
+          
+          if [ -n "${{ secrets.b2c_client_secret }}" ]; then
+            echo "  ✅ B2C_CLIENT_SECRET from secrets.b2c_client_secret"
+          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_SECRET }}" ]; then
+            echo "  📖 B2C_CLIENT_SECRET from legacy secrets.B2C_SMOKE_CLIENT_SECRET"
+          else
+            echo "  ⚠️ B2C_CLIENT_SECRET not configured"
+          fi
           
           # Determine test filter - Reqnroll tags (e.g., @smoke) become NUnit categories (without @)
           if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
@@ -527,7 +721,11 @@ jobs:
           PLAYWRIGHT_SCRIPT=$(find . -path "*/bin/Release/*/playwright.ps1" | head -n1)
           if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
             echo "📦 Installing Playwright browsers for .NET..."
-            pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
+            if [ "${{ runner.os }}" = "Linux" ]; then
+              pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
+            else
+              pwsh "$PLAYWRIGHT_SCRIPT" install
+            fi
           fi
           
           # Run tests with retry logic
@@ -595,6 +793,12 @@ jobs:
         env:
           BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           START_WEB_SERVER: "false"
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded in previous steps
         run: |
           echo "🧪 Running Playwright tests..."
           
@@ -718,6 +922,7 @@ jobs:
           echo "## 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Runner: \`${{ inputs.e2e_runner }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Preset: ${{ inputs.repo_preset || 'none (using explicit inputs)' }}" >> $GITHUB_STEP_SUMMARY
           echo "- API: http://localhost:${{ steps.config.outputs.api_port }}" >> $GITHUB_STEP_SUMMARY
           echo "- Web: http://localhost:${{ steps.config.outputs.web_port }}" >> $GITHUB_STEP_SUMMARY
