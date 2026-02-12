@@ -622,7 +622,7 @@ jobs:
           part2=$(echo "$ACCESS_TOKEN" | cut -d '.' -f2)
           rem=$(( ${#part2} % 4 ))
           if [ $rem -eq 2 ]; then part2+="=="; elif [ $rem -eq 3 ]; then part2+="="; fi
-          json=$(echo "$part2" | tr '-_' '+/' | base64 -d 2>/dev/null || echo "{}")
+          json=$(echo "$part2" | tr -- '-_' '+/' | base64 -d 2>/dev/null || echo "{}")
           subset=$(echo "$json" | jq '{iss, aud, scp, roles, tfp, tid, azp, appid, sub, iat, nbf, exp} | with_entries(select(.value != null))')
           {
             echo "### Protected smoke token claims"
