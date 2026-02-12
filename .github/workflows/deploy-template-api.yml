@@ -78,6 +78,18 @@ on:
         required: false
         type: string
         default: ''
+      b2c_authority:
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        required: false
+        type: string
+        default: ''
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -88,6 +100,10 @@ on:
       AZURE_CREDENTIALS:
         required: false
       B2C_SMOKE_CLIENT_ID:
+        required: false
+      AAD_B2C_AUTHORITY:
+        required: false
+      AAD_B2C_API_SCOPE:
         required: false
       B2C_TEST_USER_EMAIL:
         required: false
@@ -111,7 +127,6 @@ jobs:
       - name: Resolve shared workflows ref
         id: wfref
         shell: bash
-        working-directory: .
         run: |
           set -euo pipefail
           INPUT_REF="${{ inputs.shared_ref }}"
@@ -120,19 +135,19 @@ jobs:
           else
             REF="main"
             echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
-            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller (e.g., v4.1.0 or v4.1.0-pr.3.7b67a2d)." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Resolved shared workflows ref: $REF"
 
-      - name: Checkout caller repo (no token persisted)
+      - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           persist-credentials: false
           path: caller
 
-      - name: Checkout shared workflows repo (no token persisted)
+      - name: Checkout shared workflows repo
         uses: actions/checkout@v4
         with:
           repository: aexionsolutions/azure-devops-workflows
@@ -342,7 +357,6 @@ jobs:
       - name: Resolve shared workflows ref
         id: wfref
         shell: bash
-        working-directory: .
         run: |
           set -euo pipefail
           INPUT_REF="${{ inputs.shared_ref }}"
@@ -351,19 +365,19 @@ jobs:
           else
             REF="main"
             echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
-            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller (e.g., v4.1.0 or v4.1.0-pr.3.7b67a2d)." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Resolved shared workflows ref: $REF"
 
-      - name: Checkout caller repo (no token persisted)
+      - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           persist-credentials: false
           path: caller
 
-      - name: Checkout shared workflows repo (no token persisted)
+      - name: Checkout shared workflows repo
         uses: actions/checkout@v4
         with:
           repository: aexionsolutions/azure-devops-workflows
@@ -379,6 +393,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Ensure jq is installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
 
       - name: Decide base URL
         id: base
@@ -429,20 +452,22 @@ jobs:
           JSON=$(az webapp config appsettings list -g "$RG" -n "$APP" ${SLOT_ARGS[@]} -o json || echo '[]')
           AUTH_B2C=$(echo "$JSON" | jq -r '.[] | select(.name=="Auth__B2C__Authority" or .name=="Auth:B2C:Authority") | .value' | head -n1)
           CLIENT_ID=$(echo "$JSON" | jq -r '.[] | select(.name=="Auth__ClientId" or .name=="Auth:ClientId") | .value' | head -n1)
-          AUDIENCE=$(echo "$JSON" | jq -r '.[] | select(.name=="Auth__Audience" or .name=="Auth:Audience") | .value' | head -n1)
           echo "b2c_authority=$AUTH_B2C" >> $GITHUB_OUTPUT
           echo "client_id=$CLIENT_ID" >> $GITHUB_OUTPUT
-          echo "audience=$AUDIENCE" >> $GITHUB_OUTPUT
 
       - name: Mint token for protected smoke (B2C ROPC for all environments)
         id: token
         shell: bash
         env:
           BASE: ${{ steps.base.outputs.url }}
-          AUTH_B2C: ${{ steps.apisettings.outputs.b2c_authority }}
-          CLIENT_ID_API: ${{ steps.apisettings.outputs.client_id }}
-          AUDIENCE: ${{ steps.apisettings.outputs.audience }}
-          SMOKE_CLIENT_ID: ${{ secrets.B2C_SMOKE_CLIENT_ID }}
+          AUTH_B2C_INPUT: ${{ inputs.b2c_authority }}
+          AUTH_B2C_SECRET: ${{ secrets.AAD_B2C_AUTHORITY }}
+          AUTH_B2C_APP: ${{ steps.apisettings.outputs.b2c_authority }}
+          CLIENT_ID_INPUT: ${{ inputs.b2c_client_id }}
+          CLIENT_ID_APP: ${{ steps.apisettings.outputs.client_id }}
+          B2C_SCOPE_INPUT: ${{ inputs.b2c_scope }}
+          B2C_SCOPE_SECRET: ${{ secrets.AAD_B2C_API_SCOPE }}
+          SMOKE_CLIENT_ID: ${{ inputs.b2c-smoke-client-id || secrets.B2C_SMOKE_CLIENT_ID }}
           TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
           KV_URL: ${{ inputs['b2c-kv-url'] }}
@@ -451,23 +476,98 @@ jobs:
         run: |
           set -euo pipefail
           echo "🔐 Using B2C ROPC (password grant) for token minting..."
-          if [ -z "$AUTH_B2C" ] || [ -z "$CLIENT_ID_API" ]; then
-            echo "❌ ERROR: B2C authority or API clientId missing from app settings." >&2
-            echo "Ensure 'Auth:B2C:Authority' and 'Auth:ClientId' are configured on the API app settings." >&2
-            exit 1
-          fi
-          TENANT_ID=$(echo "$AUTH_B2C" | sed -n 's|.*/\([0-9a-f-]*\)/v2\.0|\1|p')
-          TENANT_SUBDOMAIN=$(echo "$AUTH_B2C" | sed -n 's|https://\([^.]*\)\.ciamlogin\.com.*|\1|p')
-          if [ -z "$TENANT_ID" ] || [ -z "$TENANT_SUBDOMAIN" ]; then
-            echo "Could not extract tenant ID or subdomain from authority: $AUTH_B2C" >&2
-            exit 1
-          fi
-          TOKEN_URL="https://${TENANT_SUBDOMAIN}.ciamlogin.com/${TENANT_ID}/oauth2/v2.0/token"
-          if [[ "$AUDIENCE" == api://* ]]; then
-            SCOPE="${AUDIENCE}/Orders.ReadWrite openid offline_access"
+          AUTH_B2C_FROM_INPUTS=no
+          AUTH_B2C_FROM_SECRETS=no
+          AUTH_B2C_FROM_APP=no
+          if [ -n "${AUTH_B2C_INPUT:-}" ]; then
+            AUTH_B2C="$AUTH_B2C_INPUT"
+            AUTH_B2C_FROM_INPUTS=yes
+          elif [ -n "${AUTH_B2C_SECRET:-}" ]; then
+            AUTH_B2C="$AUTH_B2C_SECRET"
+            AUTH_B2C_FROM_SECRETS=yes
+          elif [ -n "${AUTH_B2C_APP:-}" ]; then
+            AUTH_B2C="$AUTH_B2C_APP"
+            AUTH_B2C_FROM_APP=yes
           else
-            SCOPE="api://${AUDIENCE}/Orders.ReadWrite openid offline_access"
+            AUTH_B2C=""
           fi
+
+          CLIENT_ID_FROM_INPUTS=no
+          CLIENT_ID_FROM_APP=no
+          if [ -n "${CLIENT_ID_INPUT:-}" ]; then
+            CLIENT_ID_API="$CLIENT_ID_INPUT"
+            CLIENT_ID_FROM_INPUTS=yes
+          elif [ -n "${CLIENT_ID_APP:-}" ]; then
+            CLIENT_ID_API="$CLIENT_ID_APP"
+            CLIENT_ID_FROM_APP=yes
+          else
+            CLIENT_ID_API=""
+          fi
+
+          echo "AUTH_B2C from inputs: $AUTH_B2C_FROM_INPUTS"
+          echo "AUTH_B2C from secrets: $AUTH_B2C_FROM_SECRETS"
+          echo "AUTH_B2C fetched from app settings: $AUTH_B2C_FROM_APP"
+          echo "CLIENT_ID from inputs: $CLIENT_ID_FROM_INPUTS"
+          echo "CLIENT_ID fetched from app settings: $CLIENT_ID_FROM_APP"
+
+          if [ -z "${AUTH_B2C:-}" ]; then
+            echo "❌ ERROR: B2C authority is missing." >&2
+            echo "Provide inputs.b2c_authority or secrets.AAD_B2C_AUTHORITY (legacy)." >&2
+            echo "Optional fallback: configure Auth:B2C:Authority in API app settings." >&2
+            exit 1
+          fi
+          if [ -z "${CLIENT_ID_API:-}" ]; then
+            echo "❌ ERROR: API client ID is missing." >&2
+            echo "Provide inputs.b2c_client_id or configure Auth:ClientId in API app settings." >&2
+            exit 1
+          fi
+          if echo "$AUTH_B2C" | grep -q "ciamlogin.com"; then
+            TENANT_ID=$(echo "$AUTH_B2C" | sed -n 's|.*/\([0-9a-f-]*\)/v2\.0|\1|p')
+            TENANT_SUBDOMAIN=$(echo "$AUTH_B2C" | sed -n 's|https://\([^.]*\)\.ciamlogin\.com.*|\1|p')
+            if [ -z "$TENANT_ID" ] || [ -z "$TENANT_SUBDOMAIN" ]; then
+              echo "Could not extract tenant ID or subdomain from authority: $AUTH_B2C" >&2
+              exit 1
+            fi
+            TOKEN_URL="https://${TENANT_SUBDOMAIN}.ciamlogin.com/${TENANT_ID}/oauth2/v2.0/token"
+          elif echo "$AUTH_B2C" | grep -q "b2clogin.com"; then
+            TENANT_SUBDOMAIN=$(echo "$AUTH_B2C" | sed -n 's|https://\([^.]*\)\.b2clogin\.com.*|\1|p')
+            TENANT_DOMAIN=$(echo "$AUTH_B2C" | sed -n 's|https://[^/]*\/\([^/]*\)/.*|\1|p')
+            POLICY=$(echo "$AUTH_B2C" | sed -n 's|https://[^/]*\/[^/]*\/\([^/]*\)/v2\.0|\1|p')
+            if [ -z "$TENANT_SUBDOMAIN" ] || [ -z "$TENANT_DOMAIN" ]; then
+              echo "Could not extract tenant subdomain or domain from authority: $AUTH_B2C" >&2
+              exit 1
+            fi
+            if [ -n "${POLICY:-}" ]; then
+              TOKEN_URL="https://${TENANT_SUBDOMAIN}.b2clogin.com/${TENANT_DOMAIN}/${POLICY}/oauth2/v2.0/token"
+            else
+              TOKEN_URL="https://${TENANT_SUBDOMAIN}.b2clogin.com/${TENANT_DOMAIN}/oauth2/v2.0/token"
+            fi
+          else
+            echo "Unsupported authority host in AUTH_B2C: $AUTH_B2C" >&2
+            exit 1
+          fi
+
+          SCOPE_FROM_INPUTS=no
+          SCOPE_FROM_SECRETS=no
+          if [ -n "${B2C_SCOPE_INPUT:-}" ]; then
+            SCOPE="$B2C_SCOPE_INPUT"
+            SCOPE_FROM_INPUTS=yes
+          elif [ -n "${B2C_SCOPE_SECRET:-}" ]; then
+            SCOPE="$B2C_SCOPE_SECRET"
+            SCOPE_FROM_SECRETS=yes
+          else
+            echo "❌ ERROR: B2C scope is missing." >&2
+            echo "Provide inputs.b2c_scope or secrets.AAD_B2C_API_SCOPE (e.g. 'api://<api-app-id>/Orders.ReadWrite')." >&2
+            exit 1
+          fi
+
+          echo "SCOPE from inputs: $SCOPE_FROM_INPUTS"
+          echo "SCOPE from secrets: $SCOPE_FROM_SECRETS"
+          echo "Token host: $(echo "$TOKEN_URL" | sed 's|https://||' | cut -d/ -f1)"
+          echo "Scope (first token): $(echo "$SCOPE" | awk '{print $1}')"
+
+          if [[ "$SCOPE" != *"openid"* ]]; then SCOPE="$SCOPE openid"; fi
+          if [[ "$SCOPE" != *"offline_access"* ]]; then SCOPE="$SCOPE offline_access"; fi
           if [ -z "$SMOKE_CLIENT_ID" ]; then
             echo "❌ ERROR: B2C_SMOKE_CLIENT_ID secret is required for ROPC authentication." >&2
             exit 1
@@ -509,7 +609,6 @@ jobs:
             echo "$RESP" >&2
             exit 1
           fi
-          echo "token=***" >> $GITHUB_OUTPUT
           echo "::add-mask::$ACCESS_TOKEN"
           echo "B2C_ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
 
@@ -602,7 +701,6 @@ jobs:
       - name: Resolve shared workflows ref
         id: wfref
         shell: bash
-        working-directory: .
         run: |
           set -euo pipefail
           INPUT_REF="${{ inputs.shared_ref }}"
@@ -611,19 +709,19 @@ jobs:
           else
             REF="main"
             echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
-            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller (e.g., v4.1.0 or v4.1.0-pr.3.7b67a2d)." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Resolved shared workflows ref: $REF"
 
-      - name: Checkout caller repo (no token persisted)
+      - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           persist-credentials: false
           path: caller
 
-      - name: Checkout shared workflows repo (no token persisted)
+      - name: Checkout shared workflows repo
         uses: actions/checkout@v4
         with:
           repository: aexionsolutions/azure-devops-workflows
