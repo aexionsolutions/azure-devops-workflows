@@ -347,10 +347,6 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       CALLER_WORKDIR: caller
-
-    defaults:
-      run:
-        working-directory: caller
     outputs:
       base_url: ${{ steps.base.outputs.url }}
     steps:
