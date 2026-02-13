@@ -207,36 +207,26 @@ jobs:
         with:
           ref: ${{ inputs.git_ref || github.ref }}
       
+      # Checkout shared workflows for azure-login-smart action
+      - name: Checkout shared workflows
+        if: inputs.azure_keyvault_name != ''
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ github.action_ref || 'main' }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: shared
+      
       # Azure Login (if Key Vault is used)
-      - name: Azure Login (Workload Identity)
-        if: inputs.azure_keyvault_name != '' && secrets.AZURE_CLIENT_ID != ''
-        uses: azure/login@v2
+      - name: Azure login
+        if: inputs.azure_keyvault_name != ''
+        uses: ./shared/.github/actions/azure-login-smart
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      
-      - name: Azure Login (Service Principal - Legacy)
-        if: inputs.azure_keyvault_name != '' && secrets.AZURE_CLIENT_ID == ''
-        uses: azure/login@v2
-        with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      
-      # Validate Azure authentication is configured when Key Vault is requested
-      - name: Validate Azure authentication for Key Vault
-        if: inputs.azure_keyvault_name != ''
-        shell: bash
-        env:
-          AZURE_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CREDS: ${{ secrets.AZURE_CREDENTIALS }}
-        run: |
-          if [ -z "$AZURE_CLIENT" ] && [ -z "$AZURE_CREDS" ]; then
-            echo "❌ Error: azure_keyvault_name is set but no Azure authentication is configured."
-            echo "   Please provide either:"
-            echo "   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets (for OIDC)"
-            echo "   - AZURE_CREDENTIALS secret (for service principal)"
-            exit 1
-          fi
       
       # Retrieve database connection string from Azure Key Vault
       - name: Get database connection string from Key Vault
