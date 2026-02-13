@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚨 Breaking Changes
 
+#### web-e2e-deployed.yml: Azure Credentials Now Passed as Secrets
+
+**Context:** Azure credentials were inconsistently defined as inputs in `web-e2e-deployed.yml` but as secrets in `deploy-template-web.yml` and `deploy-template-api.yml`.
+
+- **BREAKING:** `azure_client_id`, `azure_tenant_id`, `azure_subscription_id` changed from **inputs** to **secrets**
+  - Before: Passed in `with:` block as inputs (incompatible with reusable workflow secret passthrough rules)
+  - After: Passed in `secrets:` block (consistent with other deployment workflows)
+  - Reason: GitHub Actions doesn't allow `secrets.*` context in reusable workflow `with:` block. Using secrets block matches pattern in deploy-template-web.yml and deploy-template-api.yml.
+  
+- **Migration:** In your calling workflows, move these three parameters from `with:` to `secrets:`:
+  ```yaml
+  # Before
+  with:
+    azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+    azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+    azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  secrets:
+    AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+  
+  # After
+  with:
+    # (removed azure credentials from here)
+  secrets:
+    AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+  ```
+
 #### All Repo-Specific Paths Now Required (No Defaults)
 
 **Philosophy Change:** Explicit configuration over implicit defaults for fail-safe multi-repo compatibility.

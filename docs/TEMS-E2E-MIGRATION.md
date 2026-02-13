@@ -422,9 +422,6 @@ e2e-deployed:
     environment_name: ${{ inputs.environment }}
     azure_keyvault_name: tems-${{ inputs.environment }}-kv
     azure_keyvault_secret_name: PostgresConnectionString
-    azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
-    azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-    azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     
     # Test Configuration  
     test_filter: '@smoke'
@@ -619,12 +616,12 @@ jobs:
       api_url: https://tems-${{ inputs.environment }}-api.azurewebsites.net
       environment_name: ${{ inputs.environment }}
       azure_keyvault_name: tems-${{ inputs.environment }}-kv
-      azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       test_filter: '@smoke'
       e2e_retry_attempts: 3
     secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
       E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
 ```

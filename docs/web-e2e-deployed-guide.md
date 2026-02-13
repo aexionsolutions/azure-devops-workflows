@@ -186,17 +186,19 @@ jobs:
       environment_name: ${{ inputs.environment }}  # Loads appsettings.{env}.json
       azure_keyvault_name: tems-${{ inputs.environment }}-kv
       azure_keyvault_secret_name: PostgresConnectionString
-      azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       
       # Test Configuration
       test_filter: '@smoke'
       e2e_retry_attempts: 3
     secrets:
+      # Azure Authentication (for Key Vault access)
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}  # Fallback if OIDC not configured
+      # Test Credentials
       E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
       E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
-      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}  # Fallback if OIDC not configured
 ```
 
 **What this does:**
@@ -333,9 +335,6 @@ jobs:
 | `database_connection_string` | `''` | Database connection string (direct). Use this for non-Azure deployments. |
 | `azure_keyvault_name` | `''` | Azure Key Vault name to retrieve database connection string from |
 | `azure_keyvault_secret_name` | `'PostgresConnectionString'` | Secret name in Key Vault for database connection string |
-| `azure_client_id` | `''` | Azure Client ID for Key Vault access (workload identity/OIDC) |
-| `azure_tenant_id` | `''` | Azure Tenant ID for Key Vault access |
-| `azure_subscription_id` | `''` | Azure Subscription ID for Key Vault access |
 
 **Note:** Database connection retrieval priority:
 1. Azure Key Vault (if `azure_keyvault_name` is set)
@@ -347,10 +346,13 @@ jobs:
 
 | Secret | Required | Description |
 |--------|----------|-------------|
+| `AZURE_CLIENT_ID` | No | Azure Client ID for Key Vault access (workload identity/OIDC) |
+| `AZURE_TENANT_ID` | No | Azure Tenant ID for Key Vault access |
+| `AZURE_SUBSCRIPTION_ID` | No | Azure Subscription ID for Key Vault access |
+| `AZURE_CREDENTIALS` | No | Azure credentials JSON (legacy service principal auth method for Key Vault) |
 | `E2E_AUTH_TOKEN` | No | Authentication token for deployed environment |
 | `E2E_TEST_USER_EMAIL` | No | Test user email for authentication tests |
 | `E2E_TEST_USER_PASSWORD` | No | Test user password for authentication tests |
-| `AZURE_CREDENTIALS` | No | Azure credentials JSON (legacy auth method for Key Vault) |
 | `DATABASE_CONNECTION_STRING` | No | Database connection string (alternative to Key Vault) |
 
 ---

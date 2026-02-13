@@ -125,25 +125,6 @@ on:
         type: string
         default: 'PostgresConnectionString'
       
-      # Azure Authentication (required if using Key Vault)
-      azure_client_id:
-        description: 'Azure Client ID for Key Vault access (workload identity)'
-        required: false
-        type: string
-        default: ''
-      
-      azure_tenant_id:
-        description: 'Azure Tenant ID for Key Vault access'
-        required: false
-        type: string
-        default: ''
-      
-      azure_subscription_id:
-        description: 'Azure Subscription ID for Key Vault access'
-        required: false
-        type: string
-        default: ''
-      
       # Generic E2E environment variables (pass any test-specific env vars as JSON)
       e2e_env_vars:
         description: 'Additional E2E environment variables as JSON string (e.g., {"E2E_ADMIN_EMAIL":"admin@test.com", "CUSTOM_VAR":"value"}). Secrets should be passed via e2e_secrets.'
@@ -169,11 +150,21 @@ on:
         default: ''
     
     secrets:
-      E2E_AUTH_TOKEN:
-        description: 'Authentication token for deployed environment (if required)'
+      # Azure Authentication (required if using Key Vault with OIDC)
+      AZURE_CLIENT_ID:
+        description: 'Azure Client ID for Key Vault access (workload identity)'
+        required: false
+      AZURE_TENANT_ID:
+        description: 'Azure Tenant ID for Key Vault access'
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure Subscription ID for Key Vault access'
         required: false
       AZURE_CREDENTIALS:
-        description: 'Azure credentials JSON (legacy auth method)'
+        description: 'Azure credentials JSON (legacy service principal auth method)'
+        required: false
+      E2E_AUTH_TOKEN:
+        description: 'Authentication token for deployed environment (if required)'
         required: false
       DATABASE_CONNECTION_STRING:
         description: 'Database connection string (alternative to using Key Vault)'
@@ -218,15 +209,15 @@ jobs:
       
       # Azure Login (if Key Vault is used)
       - name: Azure Login (Workload Identity)
-        if: inputs.azure_keyvault_name != '' && inputs.azure_client_id != ''
+        if: inputs.azure_keyvault_name != '' && secrets.AZURE_CLIENT_ID != ''
         uses: azure/login@v2
         with:
-          client-id: ${{ inputs.azure_client_id }}
-          tenant-id: ${{ inputs.azure_tenant_id }}
-          subscription-id: ${{ inputs.azure_subscription_id }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       
       - name: Azure Login (Service Principal - Legacy)
-        if: inputs.azure_keyvault_name != '' && inputs.azure_client_id == ''
+        if: inputs.azure_keyvault_name != '' && secrets.AZURE_CLIENT_ID == ''
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
@@ -236,12 +227,13 @@ jobs:
         if: inputs.azure_keyvault_name != ''
         shell: bash
         env:
+          AZURE_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CREDS: ${{ secrets.AZURE_CREDENTIALS }}
         run: |
-          if [ -z "${{ inputs.azure_client_id }}" ] && [ -z "$AZURE_CREDS" ]; then
+          if [ -z "$AZURE_CLIENT" ] && [ -z "$AZURE_CREDS" ]; then
             echo "❌ Error: azure_keyvault_name is set but no Azure authentication is configured."
             echo "   Please provide either:"
-            echo "   - azure_client_id, azure_tenant_id, azure_subscription_id (for OIDC)"
+            echo "   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets (for OIDC)"
             echo "   - AZURE_CREDENTIALS secret (for service principal)"
             exit 1
           fi
