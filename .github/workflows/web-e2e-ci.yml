@@ -617,29 +617,11 @@ jobs:
             echo "ℹ️  No additional E2E secrets JSON to load"
           fi
 
-      - name: Run Reqnroll E2E tests
+      - name: Prepare Reqnroll E2E tests
+        id: filter-prep
         if: inputs.e2e_project != ''
-        env:
-          RUN_E2E: "true"
-          E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
-          E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
-          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
-          E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
-          E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
-          E2E_HEADLESS: "true"
-          E2E_SLOWMO: "0"
-          E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video && 'true' || 'false' }}
-          # B2C Configuration (with backwards compatibility for legacy secret names)
-          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
-          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
-          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
-          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          # Additional E2E env vars and secrets loaded from JSON in previous steps
         run: |
-          echo "🧪 Running Reqnroll/SpecFlow E2E tests..."
+          echo "🧪 Preparing Reqnroll/SpecFlow E2E tests..."
           echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
           
           # Log B2C configuration source (helps debug fallback paths without leaking secrets)
@@ -701,64 +683,44 @@ jobs:
             pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
           fi
           
-          # Run tests with retry logic
-          TOTAL_ATTEMPTS=${{ inputs.e2e_retry_attempts }}
-          if [ -z "$TOTAL_ATTEMPTS" ] || [ "$TOTAL_ATTEMPTS" -lt 1 ]; then
-            TOTAL_ATTEMPTS=1
+          # Output filter for next step
+          if [ -n "$FILTER" ]; then
+            echo "filter=Category=$FILTER" >> $GITHUB_OUTPUT
+          else
+            echo "filter=" >> $GITHUB_OUTPUT
           fi
-          
-          ATTEMPT=1
-          FINAL_EXIT_CODE=1
-          
-          echo "ℹ️  Test retry configuration: max $TOTAL_ATTEMPTS attempt(s)"
-          
-          while [ $ATTEMPT -le $TOTAL_ATTEMPTS ]; do
-            echo ""
-            echo "🔄 Test attempt $ATTEMPT of $TOTAL_ATTEMPTS..."
-            
-            # Run tests (continue on failure to allow retry)
-            # Note: We build the command directly instead of using eval to avoid shell escaping issues
-            set +e
-            if [ -n "$FILTER" ]; then
-              echo "ℹ️  Executing: dotnet test with --filter \"Category=$FILTER\""
-              dotnet test "${{ inputs.e2e_project }}" \
-                -c Release \
-                --no-build \
-                --logger "trx;LogFileName=e2e-attempt-${ATTEMPT}.trx" \
-                --logger "console;verbosity=normal" \
-                --filter "Category=$FILTER"
-              EXIT_CODE=$?
-            else
-              echo "ℹ️  Executing: dotnet test (no filter)"
-              dotnet test "${{ inputs.e2e_project }}" \
-                -c Release \
-                --no-build \
-                --logger "trx;LogFileName=e2e-attempt-${ATTEMPT}.trx" \
-                --logger "console;verbosity=normal"
-              EXIT_CODE=$?
-            fi
-            set -e
-            
-            if [ $EXIT_CODE -eq 0 ]; then
-              echo "✅ Reqnroll E2E tests passed on attempt $ATTEMPT"
-              FINAL_EXIT_CODE=0
-              break
-            else
-              echo "⚠️  Reqnroll E2E tests failed on attempt $ATTEMPT (exit code: $EXIT_CODE)"
-              FINAL_EXIT_CODE=$EXIT_CODE
-              
-              if [ $ATTEMPT -lt $TOTAL_ATTEMPTS ]; then
-                echo "🔄 Retrying in 5 seconds..."
-                sleep 5
-              else
-                echo "❌ All $TOTAL_ATTEMPTS attempts failed"
-              fi
-            fi
-            
-            ATTEMPT=$((ATTEMPT + 1))
-          done
-          
-          exit $FINAL_EXIT_CODE
+
+      - name: Run Reqnroll E2E tests
+        if: inputs.e2e_project != ''
+        uses: ./.github/actions/dotnet-test-retry
+        env:
+          RUN_E2E: "true"
+          E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
+          E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
+          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+          E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+          E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+          E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+          E2E_HEADLESS: "true"
+          E2E_SLOWMO: "0"
+          E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video && 'true' || 'false' }}
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded from JSON in previous steps
+        with:
+          project: ${{ inputs.e2e_project }}
+          filter: ${{ steps.filter-prep.outputs.filter }}
+          max-attempts: ${{ inputs.e2e_retry_attempts }}
+          results-directory: ./TestResults
+          configuration: Release
+          no-build: true
+          additional-args: --logger console;verbosity=normal
+          trx-filename-prefix: e2e-attempt
 
       - name: Run Playwright tests
         if: inputs.run_playwright_tests == true

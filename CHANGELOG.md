@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚨 Breaking Changes
 
+#### Smart Test Retry: Rewritten with Robust PowerShell Implementation
+
+**Context:** Previous bash implementation had critical correctness issues with TRX parsing and filter syntax that would cause retry to fail silently or not retry failed tests correctly.
+
+- **IMPROVED:** `.github/actions/dotnet-test-retry` now uses PowerShell Core (`pwsh`) for reliable operation
+  - Fixed: TRX parsing now uses proper XML DOM with XPath (maps `testId` → `TestMethod className.name`)
+  - Fixed: Filter syntax now builds correct OR expressions: `(FullyQualifiedName="A") | (FullyQualifiedName="B")`
+  - Fixed: Eliminated `eval` command and shell injection risks
+  - Fixed: Properly handles test names with quotes, parentheses, ampersands, pipes
+  - Before: Used grep with O(n²) complexity, unreliable `testName` matching, broken filter syntax `FullyQualifiedName~A|B|C`
+  - After: Uses XML DOM parsing (O(n)), stable FQN mapping, correct dotnet test filter syntax
+  
+- **BREAKING:** `additional-args` input must not be wrapped in quotes
+  ```yaml
+  # Before (WRONG - will break)
+  additional-args: --logger "console;verbosity=normal"
+  
+  # After (CORRECT)
+  additional-args: --logger console;verbosity=normal
+  ```
+  - Reason: PowerShell splits on whitespace; quotes would be treated as part of the argument value
+  
+- **Migration:** 
+  - If you call `.github/actions/dotnet-test-retry` directly: remove outer quotes from `additional-args`
+  - If you only call `web-e2e-deployed.yml` or `web-e2e-ci.yml`: no changes needed (already fixed)
+  - PowerShell Core (`pwsh`) is available on all GitHub-hosted runners by default
+
+- **Added**: New composite action `.github/actions/dotnet-test-retry` for reusable smart test retry logic
+
+### Fixed
+
+- **web-e2e-deployed.yml & web-e2e-ci.yml: Environment variables now properly passed to test runs** (#TBD)
+  - Fixed: Environment variables (E2E_BASE_URL, B2C_AUTHORITY, ConnectionStrings__, etc.) now set on composite action step with `env:` block
+  - Fixed: Step naming clarified - "Prepare Reqnroll E2E tests" for setup, "Run Reqnroll E2E tests" for actual execution
+  - Before: Environment variables set in logging step were not inherited by composite action, causing tests to fail or use wrong configuration
+  - After: Environment variables properly scoped to test execution step
+  - Impact: E2E tests now receive correct environment configuration (base URLs, auth tokens, connection strings, B2C config)
+
+See [.github/actions/dotnet-test-retry/README.md](.github/actions/dotnet-test-retry/README.md) for full implementation details and correctness guarantees.
+
 #### web-e2e-deployed.yml: Azure Credentials Now Passed as Secrets
 
 **Context:** Azure credentials were inconsistently defined as inputs in `web-e2e-deployed.yml` but as secrets in `deploy-template-web.yml` and `deploy-template-api.yml`.
