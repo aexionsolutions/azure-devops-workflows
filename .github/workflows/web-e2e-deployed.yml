@@ -97,16 +97,98 @@ on:
         required: false
         type: string
         default: ''
+      
+      # Environment Configuration
+      environment_name:
+        description: 'Environment name (dev, uat, preprod, prod) - used for loading appsettings.{env}.json'
+        required: false
+        type: string
+        default: ''
+      
+      # Database Configuration
+      database_connection_string:
+        description: 'Database connection string for E2E tests (overrides default)'
+        required: false
+        type: string
+        default: ''
+      
+      # Azure Key Vault (alternative to direct connection string)
+      azure_keyvault_name:
+        description: 'Azure Key Vault name to retrieve secrets from'
+        required: false
+        type: string
+        default: ''
+      
+      azure_keyvault_secret_name:
+        description: 'Secret name in Key Vault for database connection string'
+        required: false
+        type: string
+        default: 'PostgresConnectionString'
+      
+      # Generic E2E environment variables (pass any test-specific env vars as JSON)
+      e2e_env_vars:
+        description: 'Additional E2E environment variables as JSON string (e.g., {"E2E_ADMIN_EMAIL":"admin@test.com", "CUSTOM_VAR":"value"}). Secrets should be passed via e2e_secrets.'
+        required: false
+        type: string
+        default: '{}'
+      
+      # B2C Configuration (non-sensitive, passed as inputs)
+      b2c_authority:
+        description: 'Azure B2C authority URL (e.g., https://yourtenantname.b2clogin.com/yourtenantname.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN)'
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        description: 'Azure B2C client ID for E2E tests'
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        description: 'Azure B2C API scope (e.g., https://yourtenantname.onmicrosoft.com/api/access_as_user)'
+        required: false
+        type: string
+        default: ''
     
     secrets:
+      # Azure Authentication (required if using Key Vault with OIDC)
+      AZURE_CLIENT_ID:
+        description: 'Azure Client ID for Key Vault access (workload identity)'
+        required: false
+      AZURE_TENANT_ID:
+        description: 'Azure Tenant ID for Key Vault access'
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure Subscription ID for Key Vault access'
+        required: false
+      AZURE_CREDENTIALS:
+        description: 'Azure credentials JSON (legacy service principal auth method)'
+        required: false
       E2E_AUTH_TOKEN:
         description: 'Authentication token for deployed environment (if required)'
         required: false
-      E2E_TEST_USER_EMAIL:
-        description: 'Test user email for authentication tests'
+      DATABASE_CONNECTION_STRING:
+        description: 'Database connection string (alternative to using Key Vault)'
         required: false
-      E2E_TEST_USER_PASSWORD:
-        description: 'Test user password for authentication tests'
+      # B2C client secret (sensitive)
+      b2c_client_secret:
+        description: 'Azure B2C client secret for E2E test user ROPC flow'
+        required: false
+      # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
+      e2e_secrets:
+        description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_USER_EMAIL":"admin@test.com", "E2E_ADMIN_USER_PASSWORD":"secret123"}). These will be masked in logs.'
+        required: false
+      # Legacy B2C secrets (for backwards compatibility)
+      AAD_B2C_AUTHORITY:
+        description: 'Legacy: Azure B2C authority URL (prefer inputs.b2c_authority)'
+        required: false
+      B2C_SMOKE_CLIENT_ID:
+        description: 'Legacy: Azure B2C client ID (prefer inputs.b2c_client_id)'
+        required: false
+      AAD_B2C_API_SCOPE:
+        description: 'Legacy: Azure B2C API scope (prefer inputs.b2c_scope)'
+        required: false
+      B2C_SMOKE_CLIENT_SECRET:
+        description: 'Legacy: Azure B2C client secret (prefer secrets.b2c_client_secret)'
         required: false
 
 jobs:
@@ -114,12 +196,76 @@ jobs:
     name: E2E Tests (Deployed)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Grant permissions for Azure workload identity (OIDC)
+    permissions:
+      id-token: write
+      contents: read
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.git_ref || github.ref }}
+      
+      # Azure Login (if Key Vault is used)
+      - name: Azure Login (Workload Identity)
+        if: inputs.azure_keyvault_name != '' && secrets.AZURE_CLIENT_ID != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Azure Login (Service Principal - Legacy)
+        if: inputs.azure_keyvault_name != '' && secrets.AZURE_CLIENT_ID == ''
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      # Validate Azure authentication is configured when Key Vault is requested
+      - name: Validate Azure authentication for Key Vault
+        if: inputs.azure_keyvault_name != ''
+        shell: bash
+        env:
+          AZURE_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CREDS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          if [ -z "$AZURE_CLIENT" ] && [ -z "$AZURE_CREDS" ]; then
+            echo "❌ Error: azure_keyvault_name is set but no Azure authentication is configured."
+            echo "   Please provide either:"
+            echo "   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets (for OIDC)"
+            echo "   - AZURE_CREDENTIALS secret (for service principal)"
+            exit 1
+          fi
+      
+      # Retrieve database connection string from Azure Key Vault
+      - name: Get database connection string from Key Vault
+        if: inputs.azure_keyvault_name != ''
+        id: get_db_conn
+        shell: bash
+        run: |
+          echo "🔐 Retrieving database connection string from Key Vault: ${{ inputs.azure_keyvault_name }}"
+          
+          CONN_STR=$(az keyvault secret show \
+            --vault-name "${{ inputs.azure_keyvault_name }}" \
+            --name "${{ inputs.azure_keyvault_secret_name }}" \
+            --query value -o tsv)
+          
+          if [ -z "$CONN_STR" ]; then
+            echo "❌ Failed to retrieve connection string from Key Vault"
+            exit 1
+          fi
+          
+          echo "✅ Successfully retrieved connection string from Key Vault"
+          echo "::add-mask::$CONN_STR"
+          
+          # Use heredoc format with random delimiter for safe multi-line output
+          DELIM="EOF_$(openssl rand -hex 8)"
+          {
+            echo "connection_string<<${DELIM}"
+            echo "$CONN_STR"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
       
       # Health Checks
       - name: Health Check - API
@@ -195,25 +341,189 @@ jobs:
           npm ci
           npx playwright install --with-deps
       
+      # Install Playwright browsers for Reqnroll tests (if using Microsoft.Playwright)
+      - name: Install Playwright for Reqnroll
+        if: inputs.e2e_project != ''
+        shell: bash
+        run: |
+          # Check if project uses Microsoft.Playwright
+          if grep -q "Microsoft.Playwright" "${{ inputs.e2e_project }}"; then
+            echo "📦 Installing Playwright browsers for Reqnroll tests..."
+            proj_dir="$(dirname "${{ inputs.e2e_project }}")"
+            dotnet build "${{ inputs.e2e_project }}" --nologo
+            # Find playwright.ps1 in any bin subfolder (handles Debug/Release + any target framework)
+            PLAYWRIGHT_SCRIPT=$(find "$proj_dir" -path "*/bin/*/*/playwright.ps1" 2>/dev/null | head -n1)
+            if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
+              pwsh "$PLAYWRIGHT_SCRIPT" install chromium --with-deps
+            else
+              echo "⚠️ playwright.ps1 not found; skipping browser install (Playwright may auto-install on first run)"
+            fi
+          else
+            echo "ℹ️ Reqnroll tests don't use Microsoft.Playwright - skipping browser installation"
+          fi
+      
+      # Set database connection string conditionally (only when non-empty)
+      - name: Set database connection string
+        if: inputs.e2e_project != ''
+        shell: bash
+        run: |
+          # Priority: Key Vault > direct input > secret > not set
+          CONN_STR="${{ steps.get_db_conn.outputs.connection_string || inputs.database_connection_string || secrets.DATABASE_CONNECTION_STRING }}"
+          
+          if [ -n "$CONN_STR" ]; then
+            echo "✅ Database connection string configured"
+            # Mask and write safely using heredoc (handles special chars/multiline)
+            while IFS= read -r line; do
+              [ -n "$line" ] && echo "::add-mask::$line"
+            done <<< "$CONN_STR"
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "ConnectionStrings__Postgres<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
+            # Also set Default for apps that use it
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "ConnectionStrings__Default<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
+          else
+            echo "ℹ️  No database connection string provided; tests will use default/local configuration"
+          fi
+      
+      - name: Load E2E environment variables from JSON
+        env:
+          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
+        run: |
+          # Load additional E2E environment variables from JSON input
+          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
+            echo "📦 Loading additional E2E environment variables..."
+            # Validate JSON syntax
+            if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
+              echo "❌ Error: Invalid e2e_env_vars JSON syntax"
+              exit 1
+            fi
+            # Write to temp file, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+            TEMP_FILE=$(mktemp)
+            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+            echo "Loaded environment variable keys:"
+            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+            while IFS=$'\t' read -r key value; do
+              DELIM="EOF_$(openssl rand -hex 8)"
+              {
+                echo "${key}<<${DELIM}"
+                echo "${value}"
+                echo "${DELIM}"
+              } >> "$GITHUB_ENV"
+            done < "$TEMP_FILE"
+            rm -f "$TEMP_FILE"
+            echo "✅ E2E environment variables loaded"
+          else
+            echo "ℹ️  No additional E2E environment variables to load"
+          fi
+      
+      - name: Load E2E secrets from JSON
+        env:
+          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
+        run: |
+          # Load additional E2E secrets from JSON input (and mask them)
+          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
+            echo "🔐 Loading additional E2E secrets from JSON..."
+            # Validate JSON syntax
+            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
+              echo "❌ Error: Invalid e2e_secrets JSON syntax"
+              exit 1
+            fi
+            # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+            TEMP_FILE=$(mktemp)
+            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+            echo "Loaded secret keys:"
+            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+            while IFS=$'\t' read -r key value; do
+              # Mask secrets: full value first (for single-line), then line-by-line (for multi-line)
+              if [[ "$value" != *$'\n'* ]]; then
+                # Single-line secret: mask the whole value
+                echo "::add-mask::$value"
+              else
+                # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
+                while IFS= read -r line; do
+                  [ -n "$line" ] && echo "::add-mask::$line"
+                done <<< "$value"
+              fi
+              DELIM="EOF_$(openssl rand -hex 8)"
+              {
+                echo "${key}<<${DELIM}"
+                echo "${value}"
+                echo "${DELIM}"
+              } >> "$GITHUB_ENV"
+            done < "$TEMP_FILE"
+            rm -f "$TEMP_FILE"
+            echo "✅ E2E secrets loaded and masked"
+          else
+            echo "ℹ️  No additional E2E secrets to load"
+          fi
+      
       # Run Reqnroll E2E Tests
       - name: Run Reqnroll E2E tests
         if: inputs.e2e_project != ''
         env:
           RUN_E2E: true
+          E2E_ENVIRONMENT: ${{ inputs.environment_name }}  # Generic env name for loading appsettings.{environment}.json
           E2E_BASE_URL: ${{ inputs.web_url }}
           E2E_API_BASE_URL: ${{ inputs.api_url }}
           E2E_HEADLESS: true
           E2E_SLOWMO: 0
           E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
-          E2E_TEST_USER_EMAIL: ${{ secrets.E2E_TEST_USER_EMAIL }}
-          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
           E2E_API_KEY: ${{ inputs.api_key }}
           E2E_RETRY_ATTEMPTS: ${{ inputs.e2e_retry_attempts }}
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded from JSON in previous steps
+          # ConnectionStrings__Postgres and ConnectionStrings__Default set in previous step (only when non-empty)
         run: |
           echo "🧪 Running Reqnroll E2E tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
           echo "   API URL: ${{ inputs.api_url }}"
+          
+          # Log B2C configuration source (helps debug fallback paths without leaking secrets)
+          echo "🔐 B2C Configuration:"
+          if [ -n "${{ inputs.b2c_authority }}" ]; then
+            echo "  ✅ B2C_AUTHORITY from inputs.b2c_authority"
+          elif [ -n "${{ secrets.AAD_B2C_AUTHORITY }}" ]; then
+            echo "  📖 B2C_AUTHORITY from legacy secrets.AAD_B2C_AUTHORITY"
+          else
+            echo "  ⚠️ B2C_AUTHORITY not configured"
+          fi
+          
+          if [ -n "${{ inputs.b2c_client_id }}" ]; then
+            echo "  ✅ B2C_CLIENT_ID from inputs.b2c_client_id"
+          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_ID }}" ]; then
+            echo "  📖 B2C_CLIENT_ID from legacy secrets.B2C_SMOKE_CLIENT_ID"
+          else
+            echo "  ⚠️ B2C_CLIENT_ID not configured"
+          fi
+          
+          if [ -n "${{ inputs.b2c_scope }}" ]; then
+            echo "  ✅ B2C_SCOPE from inputs.b2c_scope"
+          elif [ -n "${{ secrets.AAD_B2C_API_SCOPE }}" ]; then
+            echo "  📖 B2C_SCOPE from legacy secrets.AAD_B2C_API_SCOPE"
+          else
+            echo "  ⚠️ B2C_SCOPE not configured"
+          fi
+          
+          if [ -n "${{ secrets.b2c_client_secret }}" ]; then
+            echo "  ✅ B2C_CLIENT_SECRET from secrets.b2c_client_secret"
+          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_SECRET }}" ]; then
+            echo "  📖 B2C_CLIENT_SECRET from legacy secrets.B2C_SMOKE_CLIENT_SECRET"
+          else
+            echo "  ⚠️ B2C_CLIENT_SECRET not configured"
+          fi
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
           
@@ -268,9 +578,13 @@ jobs:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
-          E2E_TEST_USER_EMAIL: ${{ secrets.E2E_TEST_USER_EMAIL }}
-          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
           E2E_API_KEY: ${{ inputs.api_key }}
+          # B2C Configuration (with backwards compatibility for legacy secret names)
+          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          # Additional E2E env vars and secrets loaded from JSON in previous steps
         run: |
           echo "🎭 Running Playwright tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
@@ -309,7 +623,6 @@ jobs:
           path: |
             **/test-results/**
           if-no-files-found: ignore
-          retention-days: 7
           retention-days: 7
       
       # Upload Reqnroll artifacts
