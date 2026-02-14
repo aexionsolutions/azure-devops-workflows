@@ -9,6 +9,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚨 Breaking Changes
 
+#### Smart Test Retry: Rewritten with Robust PowerShell Implementation
+
+**Context:** Previous bash implementation had critical correctness issues with TRX parsing and filter syntax that would cause retry to fail silently or not retry failed tests correctly.
+
+- **IMPROVED:** `.github/actions/dotnet-test-retry` now uses PowerShell Core (`pwsh`) for reliable operation
+  - Fixed: TRX parsing now uses proper XML DOM with XPath (maps `testId` → `TestMethod className.name`)
+  - Fixed: Filter syntax now builds correct OR expressions: `(FullyQualifiedName="A") | (FullyQualifiedName="B")`
+  - Fixed: Eliminated `eval` command and shell injection risks
+  - Fixed: Properly handles test names with quotes, parentheses, ampersands, pipes
+  - Before: Used grep with O(n²) complexity, unreliable `testName` matching, broken filter syntax `FullyQualifiedName~A|B|C`
+  - After: Uses XML DOM parsing (O(n)), stable FQN mapping, correct dotnet test filter syntax
+  
+- **BREAKING:** `additional-args` input must not be wrapped in quotes
+  ```yaml
+  # Before (WRONG - will break)
+  additional-args: --logger "console;verbosity=normal"
+  
+  # After (CORRECT)
+  additional-args: --logger console;verbosity=normal
+  ```
+  - Reason: PowerShell splits on whitespace; quotes would be treated as part of the argument value
+  
+- **Migration:** 
+  - If you call `.github/actions/dotnet-test-retry` directly: remove outer quotes from `additional-args`
+  - If you only call `web-e2e-deployed.yml` or `web-e2e-ci.yml`: no changes needed (already fixed)
+  - PowerShell Core (`pwsh`) is available on all GitHub-hosted runners by default
+
+- **Added**: New composite action `.github/actions/dotnet-test-retry` for reusable smart test retry logic
+
+### Fixed
+
+- **web-e2e-deployed.yml & web-e2e-ci.yml: Environment variables now properly passed to test runs** (#TBD)
+  - Fixed: Environment variables (E2E_BASE_URL, B2C_AUTHORITY, ConnectionStrings__, etc.) now set on composite action step with `env:` block
+  - Fixed: Step naming clarified - "Prepare Reqnroll E2E tests" for setup, "Run Reqnroll E2E tests" for actual execution
+  - Before: Environment variables set in logging step were not inherited by composite action, causing tests to fail or use wrong configuration
+  - After: Environment variables properly scoped to test execution step
+  - Impact: E2E tests now receive correct environment configuration (base URLs, auth tokens, connection strings, B2C config)
+
+See [.github/actions/dotnet-test-retry/README.md](.github/actions/dotnet-test-retry/README.md) for full implementation details and correctness guarantees.
+
+#### web-e2e-deployed.yml: Azure Credentials Now Passed as Secrets
+
+**Context:** Azure credentials were inconsistently defined as inputs in `web-e2e-deployed.yml` but as secrets in `deploy-template-web.yml` and `deploy-template-api.yml`.
+
+- **BREAKING:** `azure_client_id`, `azure_tenant_id`, `azure_subscription_id` changed from **inputs** to **secrets**
+  - Before: Passed in `with:` block as inputs (incompatible with reusable workflow secret passthrough rules)
+  - After: Passed in `secrets:` block (consistent with other deployment workflows)
+  - Reason: GitHub Actions doesn't allow `secrets.*` context in reusable workflow `with:` block. Using secrets block matches pattern in deploy-template-web.yml and deploy-template-api.yml.
+  
+- **Migration:** In your calling workflows, move these three parameters from `with:` to `secrets:`:
+  ```yaml
+  # Before
+  with:
+    azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+    azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+    azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  secrets:
+    AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+  
+  # After
+  with:
+    # (removed azure credentials from here)
+  secrets:
+    AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+  ```
+
 #### All Repo-Specific Paths Now Required (No Defaults)
 
 **Philosophy Change:** Explicit configuration over implicit defaults for fail-safe multi-repo compatibility.
