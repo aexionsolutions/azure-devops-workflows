@@ -61,6 +61,9 @@ runs:
       run: |
         $ErrorActionPreference = 'Continue'
 
+        # Avoid literal pipe chars in source (PowerShell parser + Actions temp script quirks)
+        $PIPE = [char]124
+
         Write-Host "🧪 Smart .NET Test Retry"
         Write-Host "   Project: ${{ inputs.project }}"
         Write-Host "   Filter:  ${{ inputs.filter || 'none (all tests)' }}"
@@ -111,9 +114,11 @@ runs:
           foreach ($ut in $unitTests) {
             $displayName = $ut.GetAttribute("name")
             $tm = $ut.SelectSingleNode("./trx:TestMethod", $ns)
+
             if ($tm -ne $null) {
               $className = $tm.GetAttribute("className")
               $method    = $tm.GetAttribute("name")
+
               if (-not [string]::IsNullOrWhiteSpace($className) -and -not [string]::IsNullOrWhiteSpace($method)) {
                 $map[$displayName] = "$className.$method"
               } else {
@@ -125,6 +130,7 @@ runs:
           }
 
           $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed']", $ns)
+
           $failed = New-Object System.Collections.Generic.List[string]
           foreach ($n in $failedNodes) {
             $tn = $n.GetAttribute("testName")
@@ -149,6 +155,7 @@ runs:
           if ($noBuild -eq "true") { $args += "--no-build" }
 
           if (-not [string]::IsNullOrWhiteSpace($additional)) {
+            # Tokenize additional args (keeps quoted chunks reasonably)
             $extra = [System.Management.Automation.PSParser]::Tokenize($additional, [ref]$null) |
               Where-Object { $_.Type -eq 'CommandArgument' -or $_.Type -eq 'String' } |
               ForEach-Object { $_.Content }
@@ -284,14 +291,14 @@ runs:
             Write-Host "   Failed tests:"
             $failedPrev | ForEach-Object { Write-Host "     - $_" }
 
-            # ✅ Robust OR filter builder (no pipeline + -join parsing issues)
+            # Build OR filter without literal pipe char in source
             $parts = New-Object System.Collections.Generic.List[string]
             foreach ($t in $failedPrev) {
               if (-not [string]::IsNullOrWhiteSpace($t)) {
                 $parts.Add("FullyQualifiedName=$t")
               }
             }
-            $orFilter = [string]::Join("|", $parts)
+            $orFilter = [string]::Join($PIPE, $parts)
 
             $retryFilter = $orFilter
             if (-not [string]::IsNullOrWhiteSpace($baseFilter)) {
@@ -335,7 +342,7 @@ runs:
         if ($attemptFailureLists.ContainsKey($attemptsUsed)) { $lastFailed = $attemptFailureLists[$attemptsUsed] }
 
         $lastFailedCount = $lastFailed.Count
-        $lastFailedPipe  = ($lastFailed -join "|")
+        $lastFailedPipe  = [string]::Join($PIPE, $lastFailed)
 
         Write-SmartRetrySummary -AttemptsUsed $attemptsUsed -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
 
