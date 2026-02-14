@@ -192,7 +192,7 @@ runs:
           for ($i = 1; $i -le $AttemptsUsed; $i++) {
             $c = 0
             if ($CountsByAttempt.ContainsKey($i)) { $c = [int]$CountsByAttempt[$i] }
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Attempt $i: **$c failed**"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Attempt $i: **${c} failed**"
           }
 
           $first = if ($CountsByAttempt.ContainsKey(1)) { [int]$CountsByAttempt[1] } else { 0 }
@@ -201,9 +201,9 @@ runs:
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Improvement"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed on attempt 1: **$first**"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed on final attempt: **$last**"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Improvement: **$improved**"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed on attempt 1: **${first}**"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed on final attempt: **${last}**"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Improvement: **${improved}**"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
 
           if ($last -gt 0 -and $FailsByAttempt.ContainsKey($AttemptsUsed)) {
