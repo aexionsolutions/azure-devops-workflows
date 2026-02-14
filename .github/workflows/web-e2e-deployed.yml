@@ -214,6 +214,7 @@ jobs:
     steps:
       - name: Resolve shared workflows ref
         id: wfref
+        working-directory: .
         shell: bash
         run: |
           set -euo pipefail
