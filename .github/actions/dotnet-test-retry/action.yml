@@ -38,6 +38,10 @@ inputs:
     description: 'If set, do not run tests; only parse this TRX and print the computed retry filter'
     required: false
     default: ''
+  console-verbosity:
+    description: 'Console logger verbosity: quiet|minimal|normal|detailed'
+    required: false
+    default: 'normal'
 
 outputs:
   exit-code:
@@ -69,21 +73,23 @@ runs:
         $PIPE = [char]124
 
         # Inputs
-        $project     = '${{ inputs.project }}'
-        $baseFilter  = '${{ inputs.filter }}'
-        $maxAttempts = [int]'${{ inputs.max-attempts }}'
-        $resultsDir  = '${{ inputs.results-directory }}'
-        $trxPrefix   = '${{ inputs.trx-filename-prefix }}'
-        $config      = '${{ inputs.configuration }}'
-        $noBuild     = '${{ inputs.no-build }}'
-        $additional  = '${{ inputs.additional-args }}'
-        $dryRunTrx   = '${{ inputs.dry-run-trx }}'
+        $project        = '${{ inputs.project }}'
+        $baseFilter     = '${{ inputs.filter }}'
+        $maxAttempts    = [int]'${{ inputs.max-attempts }}'
+        $resultsDir     = '${{ inputs.results-directory }}'
+        $trxPrefix      = '${{ inputs.trx-filename-prefix }}'
+        $config         = '${{ inputs.configuration }}'
+        $noBuild        = '${{ inputs.no-build }}'
+        $additional     = '${{ inputs.additional-args }}'
+        $dryRunTrx      = '${{ inputs.dry-run-trx }}'
+        $consoleVerb    = '${{ inputs.console-verbosity }}'
 
         Write-Host '🧪 Smart .NET Test Retry'
         Write-Host ('   Project: {0}' -f $project)
         Write-Host ('   Filter:  {0}' -f ($(if ([string]::IsNullOrWhiteSpace($baseFilter)) { 'none (all tests)' } else { $baseFilter })))
         Write-Host ('   Max attempts: {0}' -f $maxAttempts)
         Write-Host ('   Results directory: {0}' -f $resultsDir)
+        Write-Host ('   Console verbosity: {0}' -f $consoleVerb)
 
         New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
@@ -99,6 +105,22 @@ runs:
           $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
           $ns.AddNamespace('trx', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
           @{ Xml = $xml; Ns = $ns }
+        }
+
+        function Get-TrxSummary([string]$trxPath) {
+          if (-not (Test-Path $trxPath)) { return $null }
+          $doc = Load-Trx $trxPath
+          $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
+          if ($counters -eq $null) { return $null }
+
+          return @{
+            total   = $counters.GetAttribute('total')
+            passed  = $counters.GetAttribute('passed')
+            failed  = $counters.GetAttribute('failed')
+            error   = $counters.GetAttribute('error')
+            aborted = $counters.GetAttribute('aborted')
+            timeout = $counters.GetAttribute('timeout')
+          }
         }
 
         function Get-FailedFQNsFromTrx([string]$trxPath) {
@@ -129,7 +151,7 @@ runs:
             }
           }
 
-          # ✅ Include other "failure-like" outcomes too
+          # Include other "failure-like" outcomes too
           $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
 
           $failed = New-Object System.Collections.Generic.List[string]
@@ -153,7 +175,14 @@ runs:
         function Invoke-DotNetTest([string]$filterExpr, [int]$attempt) {
           $trxFile = ('{0}-{1}.trx' -f $trxPrefix, $attempt)
 
-          $args = @('test', $project, '-c', $config, '--logger', ('trx;LogFileName={0}' -f $trxFile), '--results-directory', $resultsDir)
+          # IMPORTANT: add console logger verbosity so you see detailed test output in Actions logs
+          $args = @(
+            'test', $project,
+            '-c', $config,
+            '--logger', ('trx;LogFileName={0}' -f $trxFile),
+            '--logger', ('console;verbosity={0}' -f $consoleVerb),
+            '--results-directory', $resultsDir
+          )
 
           if ($noBuild -eq 'true') { $args += '--no-build' }
 
@@ -171,14 +200,34 @@ runs:
 
           Write-Host ('▶ dotnet {0}' -f ($args -join ' '))
           & dotnet @args
-          $LASTEXITCODE
+          return $LASTEXITCODE
         }
 
-        # ✅ Dry-run mode: validate parsing + filter generation without running tests
+        function Print-AttemptDiagnostics([int]$attempt, [int]$exitCode) {
+          $trxPath = Get-TrxPath $attempt
+          Write-Host ("   dotnet exit code: {0}" -f $exitCode)
+          Write-Host ("   TRX: {0}" -f $trxPath)
+
+          if (Test-Path $trxPath) {
+            Write-Host ("   TRX size: {0} bytes" -f ((Get-Item $trxPath).Length))
+            $sum = Get-TrxSummary $trxPath
+            if ($sum) {
+              Write-Host ("   TRX summary: total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}" -f `
+                $sum.total, $sum.passed, $sum.failed, $sum.error, $sum.aborted, $sum.timeout)
+            } else {
+              Write-Host "   TRX summary: (not found)"
+            }
+          } else {
+            Write-Host "   TRX not found!"
+          }
+        }
+
+        # Dry-run mode: validate parsing + filter generation without running tests
         if (-not [string]::IsNullOrWhiteSpace($dryRunTrx)) {
           Write-Host ''
           Write-Host ('DRY RUN - parsing TRX: {0}' -f $dryRunTrx)
-          $failed = Get-FailedFQNsFromTrx $dryRunTrx
+
+          $failed = @(Get-FailedFQNsFromTrx $dryRunTrx)
           $orFilter = Build-OrFilter $failed
           $retryFilter = if (-not [string]::IsNullOrWhiteSpace($baseFilter)) { '({0})&({1})' -f $baseFilter, $orFilter } else { $orFilter }
 
@@ -202,9 +251,11 @@ runs:
         Write-Host ('🔄 Running tests (attempt {0}/{1})' -f $attempt, $maxAttempts)
 
         $exitCode = Invoke-DotNetTest $baseFilter 1
+        Print-AttemptDiagnostics 1 $exitCode
 
         $failed1 = @(Get-FailedFQNsFromTrx (Get-TrxPath 1))
         $failedFirstCount = $failed1.Count
+        Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
 
         if ($exitCode -eq 0) {
           Write-Host '✅ All tests passed on first attempt'
@@ -220,13 +271,12 @@ runs:
         while ($attempt -lt $maxAttempts) {
           $attempt++
           Write-Host ''
-          Write-Host ('⚠️ Retrying failed tests (attempt {0}/{1})' -f $attempt, $maxAttempts)
 
           $trxPrev = Get-TrxPath ($attempt - 1)
           $failedPrev = @(Get-FailedFQNsFromTrx $trxPrev)
 
           if ($failedPrev.Count -le 0) {
-            Write-Host '✅ No failures found in previous TRX. Marking success.'
+            Write-Host ('✅ No failures found in previous TRX, but dotnet exit code was non-zero. Marking success (infra flake).')
             'exit-code=0' >> $env:GITHUB_OUTPUT
             ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
             ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
@@ -235,6 +285,7 @@ runs:
             exit 0
           }
 
+          Write-Host ('⚠️ Retrying failed tests (attempt {0}/{1})' -f $attempt, $maxAttempts)
           Write-Host ('   Failed tests to retry: {0}' -f $failedPrev.Count)
 
           $orFilter = Build-OrFilter $failedPrev
@@ -242,6 +293,7 @@ runs:
 
           Write-Host ('   Filter: {0}' -f $retryFilter)
           $exitCode = Invoke-DotNetTest $retryFilter $attempt
+          Print-AttemptDiagnostics $attempt $exitCode
 
           if ($exitCode -eq 0) {
             Write-Host ('✅ Passed on attempt {0}' -f $attempt)
@@ -262,6 +314,7 @@ runs:
 
         Write-Host ''
         Write-Host ('❌ Tests failed after {0} attempts' -f $maxAttempts)
+        Write-Host ('   Final failed tests: {0}' -f $lastFailed.Count)
 
         ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
         ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
