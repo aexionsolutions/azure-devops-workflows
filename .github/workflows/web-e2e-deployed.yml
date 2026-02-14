@@ -567,6 +567,7 @@ jobs:
           max-attempts: ${{ inputs.e2e_retry_attempts }}
           results-directory: ./TestResults
           trx-filename-prefix: reqnroll-results
+          console-verbosity: detailed
       
       # Run Playwright Tests
       - name: Run Playwright tests

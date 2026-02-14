@@ -750,7 +750,7 @@ jobs:
           results-directory: ./TestResults
           configuration: Release
           no-build: true
-          additional-args: --logger console;verbosity=normal
+          console-verbosity: detailed
           trx-filename-prefix: e2e-attempt
 
       - name: Run Playwright tests
