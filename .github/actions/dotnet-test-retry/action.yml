@@ -186,7 +186,11 @@ runs:
             if ($map.ContainsKey($tn)) { $failed.Add($map[$tn]) } else { $failed.Add($tn) }
           }
 
-          $failed | Sort-Object -Unique
+          if ($failed.Count -eq 0) {
+            return @()
+          }
+
+          return @($failed | Sort-Object -Unique)
         }
 
         function Build-OrFilter([string[]]$fqns) {
