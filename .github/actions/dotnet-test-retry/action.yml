@@ -1,0 +1,351 @@
+name: 'Smart .NET Test Retry'
+description: 'Run dotnet tests with smart retry - only re-runs failed tests instead of entire suite'
+author: 'DevOps Team'
+
+inputs:
+  project:
+    description: 'Path to .csproj file or directory to test'
+    required: true
+  filter:
+    description: 'Test filter (e.g., Category=smoke). Leave empty for all tests.'
+    required: false
+    default: ''
+  max-attempts:
+    description: 'Maximum number of test attempts (1 disables retry)'
+    required: false
+    default: '3'
+  results-directory:
+    description: 'Directory to store test results (.trx files)'
+    required: false
+    default: './TestResults'
+  configuration:
+    description: 'Build configuration (Debug/Release)'
+    required: false
+    default: 'Release'
+  no-build:
+    description: 'Skip building the test project (true/false)'
+    required: false
+    default: 'false'
+  additional-args:
+    description: 'Additional arguments to pass to dotnet test'
+    required: false
+    default: ''
+  trx-filename-prefix:
+    description: 'Prefix for TRX log filenames (results will be <prefix>-1.trx, <prefix>-2.trx, etc.)'
+    required: false
+    default: 'test-results'
+
+outputs:
+  exit-code:
+    description: 'Exit code from the test run (0 = success, non-zero = failure)'
+    value: ${{ steps.test-retry.outputs.exit-code }}
+  attempts-used:
+    description: 'Number of attempts used'
+    value: ${{ steps.test-retry.outputs.attempts-used }}
+  failed-tests-count:
+    description: 'Number of tests that failed on first attempt'
+    value: ${{ steps.test-retry.outputs.failed-tests-count }}
+  failed-tests-last-count:
+    description: 'Number of tests that failed on the final attempt'
+    value: ${{ steps.test-retry.outputs.failed-tests-last-count }}
+  failed-tests-last:
+    description: 'Pipe-delimited list of failed tests (Fully Qualified Names) on the final attempt'
+    value: ${{ steps.test-retry.outputs.failed-tests-last }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Smart test retry
+      id: test-retry
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Continue'
+
+        Write-Host "🧪 Smart .NET Test Retry"
+        Write-Host "   Project: ${{ inputs.project }}"
+        Write-Host "   Filter:  ${{ inputs.filter || 'none (all tests)' }}"
+        Write-Host "   Max attempts: ${{ inputs.max-attempts }}"
+        Write-Host "   Results directory: ${{ inputs.results-directory }}"
+
+        # Inputs
+        $project     = "${{ inputs.project }}"
+        $baseFilter  = "${{ inputs.filter }}"
+        $maxAttempts = [int]"${{ inputs.max-attempts }}"
+        $resultsDir  = "${{ inputs.results-directory }}"
+        $trxPrefix   = "${{ inputs.trx-filename-prefix }}"
+        $config      = "${{ inputs.configuration }}"
+        $noBuild     = "${{ inputs.no-build }}"
+        $additional  = "${{ inputs.additional-args }}"
+
+        New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+
+        # Track attempt-by-attempt results for summary
+        $attemptFailureCounts = @{}   # attempt -> count
+        $attemptFailureLists  = @{}   # attempt -> string[] (FQNs)
+
+        function Get-TrxPath([int]$attempt) {
+          return Join-Path $resultsDir ("{0}-{1}.trx" -f $trxPrefix, $attempt)
+        }
+
+        function Get-XmlWithNamespace([string]$path) {
+          $xml = New-Object System.Xml.XmlDocument
+          $xml.PreserveWhitespace = $true
+          $xml.Load($path)
+
+          $nsmgr = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+          $nsmgr.AddNamespace("trx", "http://microsoft.com/schemas/VisualStudio/TeamTest/2010")
+          return @{ Xml = $xml; Ns = $nsmgr }
+        }
+
+        function Get-FailedFQNsFromTrx([string]$trxPath) {
+          if (-not (Test-Path $trxPath)) { return @() }
+
+          $doc = Get-XmlWithNamespace $trxPath
+          $xml = $doc.Xml
+          $ns  = $doc.Ns
+
+          # Build map: UnitTestResult.testName -> FQN (className.name)
+          $map = @{}
+
+          $unitTests = $xml.SelectNodes("//trx:TestDefinitions/trx:UnitTest", $ns)
+          foreach ($ut in $unitTests) {
+            $displayName = $ut.GetAttribute("name")
+            $tm = $ut.SelectSingleNode("./trx:TestMethod", $ns)
+            if ($tm -ne $null) {
+              $className = $tm.GetAttribute("className")
+              $method    = $tm.GetAttribute("name")
+              if (-not [string]::IsNullOrWhiteSpace($className) -and -not [string]::IsNullOrWhiteSpace($method)) {
+                $map[$displayName] = "$className.$method"
+              } else {
+                # fallback: at least keep something stable
+                $map[$displayName] = $displayName
+              }
+            } else {
+              $map[$displayName] = $displayName
+            }
+          }
+
+          $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed']", $ns)
+          $failed = New-Object System.Collections.Generic.List[string]
+          foreach ($n in $failedNodes) {
+            $tn = $n.GetAttribute("testName")
+            if (-not [string]::IsNullOrWhiteSpace($tn)) {
+              if ($map.ContainsKey($tn)) { $failed.Add($map[$tn]) }
+              else { $failed.Add($tn) }
+            }
+          }
+
+          return $failed | Sort-Object -Unique
+        }
+
+        function Invoke-DotNetTest {
+          param(
+            [string]$filterExpr,
+            [int]$attempt
+          )
+
+          $trxFile = "{0}-{1}.trx" -f $trxPrefix, $attempt
+
+          $args = @("test", $project, "-c", $config, "--logger", "trx;LogFileName=$trxFile", "--results-directory", $resultsDir)
+
+          if ($noBuild -eq "true") { $args += "--no-build" }
+
+          if (-not [string]::IsNullOrWhiteSpace($additional)) {
+            # Split basic additional args safely-ish (keeps quoted chunks)
+            $extra = [System.Management.Automation.PSParser]::Tokenize($additional, [ref]$null) |
+              Where-Object { $_.Type -eq 'CommandArgument' -or $_.Type -eq 'String' } |
+              ForEach-Object { $_.Content }
+            if ($extra) { $args += $extra }
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($filterExpr)) {
+            $args += @("--filter", $filterExpr)
+          }
+
+          Write-Host "▶ dotnet $($args -join ' ')"
+          & dotnet @args
+          return $LASTEXITCODE
+        }
+
+        function Write-SmartRetrySummary {
+          param(
+            [int]$AttemptsUsed,
+            [hashtable]$CountsByAttempt,
+            [hashtable]$FailsByAttempt
+          )
+
+          if ([string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) { return }
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 🧪 Smart .NET Test Retry Summary"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Project:** \`${{ inputs.project }}\`"
+          if (-not [string]::IsNullOrWhiteSpace("${{ inputs.filter }}")) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Base filter:** \`${{ inputs.filter }}\`"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Base filter:** _(none)_"
+          }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Max attempts:** \`${{ inputs.max-attempts }}\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Attempts used:** \`$AttemptsUsed\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Attempt results"
+          for ($i = 1; $i -le $AttemptsUsed; $i++) {
+            $c = 0
+            if ($CountsByAttempt.ContainsKey($i)) { $c = [int]$CountsByAttempt[$i] }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Attempt $i: **${c} failed**"
+          }
+
+          $first = if ($CountsByAttempt.ContainsKey(1)) { [int]$CountsByAttempt[1] } else { 0 }
+          $last  = if ($CountsByAttempt.ContainsKey($AttemptsUsed)) { [int]$CountsByAttempt[$AttemptsUsed] } else { 0 }
+          $improved = $first - $last
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Improvement"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed on attempt 1: **${first}**"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed on final attempt: **${last}**"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Improvement: **${improved}**"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+
+          if ($last -gt 0 -and $FailsByAttempt.ContainsKey($AttemptsUsed)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Remaining failed tests (final attempt)"
+            foreach ($f in $FailsByAttempt[$AttemptsUsed]) {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- \`$f\`"
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          }
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### TRX files"
+          for ($i = 1; $i -le $AttemptsUsed; $i++) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- \`${{ inputs.results-directory }}/${{ inputs.trx-filename-prefix }}-$i.trx\`"
+          }
+        }
+
+        # -------------------------
+        # Attempt 1 (run full set)
+        # -------------------------
+        $attempt = 1
+        Write-Host ""
+        Write-Host "🔄 Running tests (attempt 1/$maxAttempts)"
+        if (-not [string]::IsNullOrWhiteSpace($baseFilter)) {
+          Write-Host "   Filter: $baseFilter"
+        } else {
+          Write-Host "   Filter: none"
+        }
+
+        $exitCode = Invoke-DotNetTest -filterExpr $baseFilter -attempt 1
+
+        $failed1 = Get-FailedFQNsFromTrx -trxPath (Get-TrxPath 1)
+        $attemptFailureCounts[1] = $failed1.Count
+        $attemptFailureLists[1]  = $failed1
+
+        if ($exitCode -eq 0) {
+          Write-Host "✅ All tests passed on first attempt"
+          Write-SmartRetrySummary -AttemptsUsed 1 -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
+
+          "exit-code=0" >> $env:GITHUB_OUTPUT
+          "attempts-used=1" >> $env:GITHUB_OUTPUT
+          "failed-tests-count=0" >> $env:GITHUB_OUTPUT
+          "failed-tests-last-count=0" >> $env:GITHUB_OUTPUT
+          "failed-tests-last=" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        $failedTestsCountFirstAttempt = $failed1.Count
+
+        # -----------------------------------------
+        # Retry loop: re-run ONLY remaining failures
+        # -----------------------------------------
+        while ($attempt -lt $maxAttempts) {
+          $attempt++
+          Write-Host ""
+          Write-Host "⚠️ Tests failed, parsing failures from attempt $($attempt-1)..."
+
+          $trxPrev = Get-TrxPath ($attempt - 1)
+          if (-not (Test-Path $trxPrev)) {
+            Write-Host "❌ TRX file not found: $trxPrev"
+            Write-Host "   Falling back to re-running all tests for attempt $attempt"
+            $exitCode = Invoke-DotNetTest -filterExpr $baseFilter -attempt $attempt
+          }
+          else {
+            $failedPrev = Get-FailedFQNsFromTrx -trxPath $trxPrev
+            $currentFailed = $failedPrev.Count
+
+            if ($currentFailed -le 0) {
+              Write-Host "✅ No failed tests detected in previous attempt; marking as success."
+              $attemptFailureCounts[$attempt] = 0
+              $attemptFailureLists[$attempt]  = @()
+
+              Write-SmartRetrySummary -AttemptsUsed $attempt -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
+
+              "exit-code=0" >> $env:GITHUB_OUTPUT
+              "attempts-used=$attempt" >> $env:GITHUB_OUTPUT
+              "failed-tests-count=$failedTestsCountFirstAttempt" >> $env:GITHUB_OUTPUT
+              "failed-tests-last-count=0" >> $env:GITHUB_OUTPUT
+              "failed-tests-last=" >> $env:GITHUB_OUTPUT
+              exit 0
+            }
+
+            Write-Host "🔄 Retrying ONLY $currentFailed failed test(s) (attempt $attempt/$maxAttempts)"
+            Write-Host "   Failed tests:"
+            $failedPrev | ForEach-Object { Write-Host "     - $_" }
+
+            # Build OR filter: FullyQualifiedName=<fqn1>|FullyQualifiedName=<fqn2>|...
+            # This is the safe/correct way (NOT FullyQualifiedName~ with a pipe string)
+            $orFilter = ($failedPrev | ForEach-Object { "FullyQualifiedName=$_" }) -join "|"
+            $retryFilter = $orFilter
+
+            if (-not [string]::IsNullOrWhiteSpace($baseFilter)) {
+              $retryFilter = "($baseFilter)&($orFilter)"
+            }
+
+            Write-Host "   Filter: $retryFilter"
+            $exitCode = Invoke-DotNetTest -filterExpr $retryFilter -attempt $attempt
+          }
+
+          # Parse this attempt’s failures for summary + potential next retry scope
+          $failedThis = Get-FailedFQNsFromTrx -trxPath (Get-TrxPath $attempt)
+          $attemptFailureCounts[$attempt] = $failedThis.Count
+          $attemptFailureLists[$attempt]  = $failedThis
+
+          if ($exitCode -eq 0) {
+            Write-Host "✅ Failed tests passed on retry attempt $attempt"
+
+            Write-SmartRetrySummary -AttemptsUsed $attempt -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
+
+            $lastFailedPipe = ($failedThis -join "|")
+
+            "exit-code=0" >> $env:GITHUB_OUTPUT
+            "attempts-used=$attempt" >> $env:GITHUB_OUTPUT
+            "failed-tests-count=$failedTestsCountFirstAttempt" >> $env:GITHUB_OUTPUT
+            "failed-tests-last-count=0" >> $env:GITHUB_OUTPUT
+            "failed-tests-last=" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          if ($attempt -lt $maxAttempts) {
+            Write-Host "⚠️ Some tests still failing, will retry..."
+            Start-Sleep -Seconds 5
+          }
+        }
+
+        # -------------------------
+        # Attempts exhausted (fail)
+        # -------------------------
+        Write-Host ""
+        Write-Host "❌ Tests failed after $maxAttempts attempts"
+
+        $attemptsUsed = $attempt
+        $lastFailed = @()
+        if ($attemptFailureLists.ContainsKey($attemptsUsed)) { $lastFailed = $attemptFailureLists[$attemptsUsed] }
+        $lastFailedCount = $lastFailed.Count
+        $lastFailedPipe  = ($lastFailed -join "|")
+
+        Write-SmartRetrySummary -AttemptsUsed $attemptsUsed -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
+
+        "exit-code=$exitCode" >> $env:GITHUB_OUTPUT
+        "attempts-used=$attemptsUsed" >> $env:GITHUB_OUTPUT
+        "failed-tests-count=$failedTestsCountFirstAttempt" >> $env:GITHUB_OUTPUT
+        "failed-tests-last-count=$lastFailedCount" >> $env:GITHUB_OUTPUT
+        "failed-tests-last=$lastFailedPipe" >> $env:GITHUB_OUTPUT
+
+        exit $exitCode
