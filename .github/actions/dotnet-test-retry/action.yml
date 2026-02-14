@@ -117,7 +117,6 @@ runs:
               if (-not [string]::IsNullOrWhiteSpace($className) -and -not [string]::IsNullOrWhiteSpace($method)) {
                 $map[$displayName] = "$className.$method"
               } else {
-                # fallback: at least keep something stable
                 $map[$displayName] = $displayName
               }
             } else {
@@ -145,13 +144,11 @@ runs:
           )
 
           $trxFile = "{0}-{1}.trx" -f $trxPrefix, $attempt
-
           $args = @("test", $project, "-c", $config, "--logger", "trx;LogFileName=$trxFile", "--results-directory", $resultsDir)
 
           if ($noBuild -eq "true") { $args += "--no-build" }
 
           if (-not [string]::IsNullOrWhiteSpace($additional)) {
-            # Split basic additional args safely-ish (keeps quoted chunks)
             $extra = [System.Management.Automation.PSParser]::Tokenize($additional, [ref]$null) |
               Where-Object { $_.Type -eq 'CommandArgument' -or $_.Type -eq 'String' } |
               ForEach-Object { $_.Content }
@@ -179,11 +176,13 @@ runs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 🧪 Smart .NET Test Retry Summary"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Project:** \`${{ inputs.project }}\`"
+
           if (-not [string]::IsNullOrWhiteSpace("${{ inputs.filter }}")) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Base filter:** \`${{ inputs.filter }}\`"
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Base filter:** _(none)_"
           }
+
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Max attempts:** \`${{ inputs.max-attempts }}\`"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Attempts used:** \`$AttemptsUsed\`"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
@@ -192,7 +191,6 @@ runs:
           for ($i = 1; $i -le $AttemptsUsed; $i++) {
             $c = 0
             if ($CountsByAttempt.ContainsKey($i)) { $c = [int]$CountsByAttempt[$i] }
-            # ✅ FIX: wrap $i before the colon
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Attempt $($i): **${c} failed**"
           }
 
@@ -227,11 +225,7 @@ runs:
         $attempt = 1
         Write-Host ""
         Write-Host "🔄 Running tests (attempt 1/$maxAttempts)"
-        if (-not [string]::IsNullOrWhiteSpace($baseFilter)) {
-          Write-Host "   Filter: $baseFilter"
-        } else {
-          Write-Host "   Filter: none"
-        }
+        if (-not [string]::IsNullOrWhiteSpace($baseFilter)) { Write-Host "   Filter: $baseFilter" } else { Write-Host "   Filter: none" }
 
         $exitCode = Invoke-DotNetTest -filterExpr $baseFilter -attempt 1
 
@@ -290,10 +284,16 @@ runs:
             Write-Host "   Failed tests:"
             $failedPrev | ForEach-Object { Write-Host "     - $_" }
 
-            # Build OR filter: FullyQualifiedName=<fqn1>|FullyQualifiedName=<fqn2>|...
-            $orFilter = ($failedPrev | ForEach-Object { "FullyQualifiedName=$_" }) -join "|"
-            $retryFilter = $orFilter
+            # ✅ Robust OR filter builder (no pipeline + -join parsing issues)
+            $parts = New-Object System.Collections.Generic.List[string]
+            foreach ($t in $failedPrev) {
+              if (-not [string]::IsNullOrWhiteSpace($t)) {
+                $parts.Add("FullyQualifiedName=$t")
+              }
+            }
+            $orFilter = [string]::Join("|", $parts)
 
+            $retryFilter = $orFilter
             if (-not [string]::IsNullOrWhiteSpace($baseFilter)) {
               $retryFilter = "($baseFilter)&($orFilter)"
             }
@@ -302,14 +302,12 @@ runs:
             $exitCode = Invoke-DotNetTest -filterExpr $retryFilter -attempt $attempt
           }
 
-          # Parse this attempt’s failures for summary + potential next retry scope
           $failedThis = Get-FailedFQNsFromTrx -trxPath (Get-TrxPath $attempt)
           $attemptFailureCounts[$attempt] = $failedThis.Count
           $attemptFailureLists[$attempt]  = $failedThis
 
           if ($exitCode -eq 0) {
             Write-Host "✅ Failed tests passed on retry attempt $attempt"
-
             Write-SmartRetrySummary -AttemptsUsed $attempt -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
 
             "exit-code=0" >> $env:GITHUB_OUTPUT
@@ -335,6 +333,7 @@ runs:
         $attemptsUsed = $attempt
         $lastFailed = @()
         if ($attemptFailureLists.ContainsKey($attemptsUsed)) { $lastFailed = $attemptFailureLists[$attemptsUsed] }
+
         $lastFailedCount = $lastFailed.Count
         $lastFailedPipe  = ($lastFailed -join "|")
 
