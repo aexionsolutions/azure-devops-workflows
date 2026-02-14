@@ -303,6 +303,17 @@ runs:
         $exitCode = Invoke-DotNetTest $baseFilter 1
         Print-AttemptDiagnostics 1 $exitCode
 
+        # Fast path: successful run should exit immediately
+        if ($exitCode -eq 0) {
+          Write-Host '✅ All tests passed on first attempt'
+          'exit-code=0' >> $env:GITHUB_OUTPUT
+          'attempts-used=1' >> $env:GITHUB_OUTPUT
+          'failed-tests-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last=' >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
         $failed1 = Get-FailedFQNsFromTrx (Get-TrxPath 1)
         
         # Handle infrastructure failures on first attempt
@@ -321,16 +332,6 @@ runs:
         $failed1 = @($failed1)
         $failedFirstCount = $failed1.Count
         Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
-
-        if ($exitCode -eq 0) {
-          Write-Host '✅ All tests passed on first attempt'
-          'exit-code=0' >> $env:GITHUB_OUTPUT
-          'attempts-used=1' >> $env:GITHUB_OUTPUT
-          'failed-tests-count=0' >> $env:GITHUB_OUTPUT
-          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-          'failed-tests-last=' >> $env:GITHUB_OUTPUT
-          exit 0
-        }
 
         # Retry attempts: re-run ONLY failures from previous attempt
         while ($attempt -lt $maxAttempts) {
