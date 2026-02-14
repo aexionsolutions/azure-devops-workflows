@@ -568,7 +568,7 @@ jobs:
           # ConnectionStrings__Postgres and ConnectionStrings__Default set in previous step (only when non-empty)
           # Additional E2E env vars and secrets loaded from JSON in previous steps
         with:
-          project: ${{ inputs.e2e_project }}
+          project: caller/${{ inputs.e2e_project }}
           filter: ${{ steps.filter.outputs.filter }}
           max-attempts: ${{ inputs.e2e_retry_attempts }}
           results-directory: ./TestResults

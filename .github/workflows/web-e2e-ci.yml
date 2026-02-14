@@ -749,7 +749,7 @@ jobs:
           B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
           # Additional E2E env vars and secrets loaded from JSON in previous steps
         with:
-          project: ${{ inputs.e2e_project }}
+          project: caller/${{ inputs.e2e_project }}
           filter: ${{ steps.filter-prep.outputs.filter }}
           max-attempts: ${{ inputs.e2e_retry_attempts }}
           results-directory: ./TestResults
