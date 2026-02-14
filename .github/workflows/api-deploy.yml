@@ -339,7 +339,7 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}
-          files: ${{ env.PACKAGE }}
+          files: caller/${{ env.PACKAGE }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attach api-tests.zip to Release (manual seed)
@@ -349,7 +349,7 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}
-          files: api-tests.zip
+          files: caller/api-tests.zip
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fallback attach via GitHub API (if missing)
