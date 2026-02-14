@@ -207,9 +207,12 @@ jobs:
       id-token: write
       contents: read
     
+    defaults:
+      run:
+        working-directory: caller
+    
     steps:
       - name: Resolve shared workflows ref
-        if: inputs.azure_keyvault_name != ''
         id: wfref
         shell: bash
         run: |
@@ -225,20 +228,20 @@ jobs:
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Resolved shared workflows ref: $REF"
       
-      - name: Checkout repository
+      - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
       
-      # Checkout shared workflows for azure-login-smart action
-      - name: Checkout shared workflows
-        if: inputs.azure_keyvault_name != ''
+      # Checkout shared workflows for composite actions (azure-login-smart, dotnet-test-retry)
+      - name: Checkout shared workflows repo
         uses: actions/checkout@v4
         with:
           repository: aexionsolutions/azure-devops-workflows
           ref: ${{ steps.wfref.outputs.ref }}
-          fetch-depth: 1
-          persist-credentials: false
+          fetch-depth: 0
           path: shared
       
       # Azure Login (if Key Vault is used)
@@ -538,7 +541,7 @@ jobs:
 
       - name: Run Reqnroll E2E tests
         if: inputs.e2e_project != ''
-        uses: ./.github/actions/dotnet-test-retry
+        uses: ./shared/.github/actions/dotnet-test-retry
         env:
           RUN_E2E: true
           E2E_ENVIRONMENT: ${{ inputs.environment_name }}

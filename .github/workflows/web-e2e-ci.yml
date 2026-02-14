@@ -7,6 +7,11 @@ on:
         description: 'Git ref (tag/sha/branch) to test. Required for promote-release to ensure tests match the build version.'
         required: false
         type: string
+      shared_ref:
+        description: 'Ref (tag/sha/branch) of aexionsolutions/azure-devops-workflows to checkout into ./shared. Set this to the same @ref used in the calling repo. If omitted, defaults to main.'
+        required: false
+        type: string
+        default: ''
       repo_preset:
         description: 'Auto-configure ports and database for known repos (tems, ravenxpress). Overrides api_port, web_port, and postgres_db if set. NOTE: database_port CANNOT be set by preset (GitHub Actions limitation - services start before steps run), so TEMS must explicitly pass database_port: 5434.'
         required: false
@@ -235,11 +240,36 @@ jobs:
         working-directory: caller
     
     steps:
-      - name: Checkout calling repo
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        run: |
+          set -euo pipefail
+          INPUT_REF="${{ inputs.shared_ref }}"
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            REF="main"
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
+      
+      - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
+
+      - name: Checkout shared workflows repo
+        uses: actions/checkout@v4
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 0
+          path: shared
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -692,7 +722,7 @@ jobs:
 
       - name: Run Reqnroll E2E tests
         if: inputs.e2e_project != ''
-        uses: ./.github/actions/dotnet-test-retry
+        uses: ./shared/.github/actions/dotnet-test-retry
         env:
           RUN_E2E: "true"
           E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
