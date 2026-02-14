@@ -225,7 +225,8 @@ runs:
 
           # Use GitHub Actions collapsible log groups
           Write-Host ('::group::dotnet {0}' -f ($args -join ' '))
-          & dotnet @args
+          # Stream dotnet output to the log, but do not emit it as function output
+          (& dotnet @args) | Out-Host
           $exitCode = $LASTEXITCODE
           Write-Host '::endgroup::'
           
