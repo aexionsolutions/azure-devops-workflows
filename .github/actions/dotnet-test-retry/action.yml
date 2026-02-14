@@ -192,7 +192,8 @@ runs:
           for ($i = 1; $i -le $AttemptsUsed; $i++) {
             $c = 0
             if ($CountsByAttempt.ContainsKey($i)) { $c = [int]$CountsByAttempt[$i] }
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Attempt $i: **${c} failed**"
+            # ✅ FIX: wrap $i before the colon
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Attempt $($i): **${c} failed**"
           }
 
           $first = if ($CountsByAttempt.ContainsKey(1)) { [int]$CountsByAttempt[1] } else { 0 }
@@ -290,7 +291,6 @@ runs:
             $failedPrev | ForEach-Object { Write-Host "     - $_" }
 
             # Build OR filter: FullyQualifiedName=<fqn1>|FullyQualifiedName=<fqn2>|...
-            # This is the safe/correct way (NOT FullyQualifiedName~ with a pipe string)
             $orFilter = ($failedPrev | ForEach-Object { "FullyQualifiedName=$_" }) -join "|"
             $retryFilter = $orFilter
 
@@ -311,8 +311,6 @@ runs:
             Write-Host "✅ Failed tests passed on retry attempt $attempt"
 
             Write-SmartRetrySummary -AttemptsUsed $attempt -CountsByAttempt $attemptFailureCounts -FailsByAttempt $attemptFailureLists
-
-            $lastFailedPipe = ($failedThis -join "|")
 
             "exit-code=0" >> $env:GITHUB_OUTPUT
             "attempts-used=$attempt" >> $env:GITHUB_OUTPUT
