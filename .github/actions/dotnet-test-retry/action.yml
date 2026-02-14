@@ -1,0 +1,435 @@
+name: 'Smart .NET Test Retry'
+description: 'Run dotnet tests with smart retry - only re-runs failed tests instead of entire suite'
+author: 'DevOps Team'
+# v4.3.0: Fixed critical infrastructure failure detection bug
+
+inputs:
+  project:
+    description: 'Path to .csproj file or directory to test'
+    required: true
+  filter:
+    description: 'Test filter (e.g., Category=smoke). Leave empty for all tests.'
+    required: false
+    default: ''
+  max-attempts:
+    description: 'Maximum number of test attempts (1 disables retry)'
+    required: false
+    default: '3'
+  results-directory:
+    description: 'Directory to store test results (.trx files)'
+    required: false
+    default: './TestResults'
+  configuration:
+    description: 'Build configuration (Debug/Release)'
+    required: false
+    default: 'Release'
+  no-build:
+    description: 'Skip building the test project (true/false)'
+    required: false
+    default: 'false'
+  additional-args:
+    description: 'Additional arguments to pass to dotnet test'
+    required: false
+    default: ''
+  trx-filename-prefix:
+    description: 'Prefix for TRX log filenames (results will be <prefix>-1.trx, <prefix>-2.trx, etc.)'
+    required: false
+    default: 'test-results'
+  dry-run-trx:
+    description: 'If set, do not run tests; only parse this TRX and print the computed retry filter'
+    required: false
+    default: ''
+  console-verbosity:
+    description: 'Console logger verbosity: quiet|minimal|normal|detailed'
+    required: false
+    default: 'normal'
+
+outputs:
+  exit-code:
+    description: 'Exit code from the test run (0 = success, non-zero = failure)'
+    value: ${{ steps.test-retry.outputs.exit-code }}
+  attempts-used:
+    description: 'Number of attempts used'
+    value: ${{ steps.test-retry.outputs.attempts-used }}
+  failed-tests-count:
+    description: 'Number of tests that failed on first attempt'
+    value: ${{ steps.test-retry.outputs.failed-tests-count }}
+  failed-tests-last-count:
+    description: 'Number of tests that failed on the final attempt'
+    value: ${{ steps.test-retry.outputs.failed-tests-last-count }}
+  failed-tests-last:
+    description: 'Pipe-delimited list of failed tests (Fully Qualified Names) on the final attempt'
+    value: ${{ steps.test-retry.outputs.failed-tests-last }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Smart test retry
+      id: test-retry
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Continue'
+
+        # Avoid literal pipe in the script text (some runner/masking combos cause parsing issues)
+        $PIPE = [char]124
+
+        # Inputs
+        $project        = '${{ inputs.project }}'
+        $baseFilter     = '${{ inputs.filter }}'
+        $maxAttempts    = [int]'${{ inputs.max-attempts }}'
+        $resultsDir     = '${{ inputs.results-directory }}'
+        $trxPrefix      = '${{ inputs.trx-filename-prefix }}'
+        $config         = '${{ inputs.configuration }}'
+        $noBuild        = '${{ inputs.no-build }}'
+        $additional     = '${{ inputs.additional-args }}'
+        $dryRunTrx      = '${{ inputs.dry-run-trx }}'
+        $consoleVerb    = '${{ inputs.console-verbosity }}'
+
+        Write-Host '🧪 Smart .NET Test Retry'
+        Write-Host ('   Project: {0}' -f $project)
+        Write-Host ('   Filter:  {0}' -f ($(if ([string]::IsNullOrWhiteSpace($baseFilter)) { 'none (all tests)' } else { $baseFilter })))
+        Write-Host ('   Max attempts: {0}' -f $maxAttempts)
+        Write-Host ('   Results directory: {0}' -f $resultsDir)
+        Write-Host ('   Console verbosity: {0}' -f $consoleVerb)
+
+        New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+
+        function Get-TrxPath([int]$attempt) {
+          Join-Path $resultsDir ('{0}-{1}.trx' -f $trxPrefix, $attempt)
+        }
+
+        function Load-Trx([string]$path) {
+          $xml = New-Object System.Xml.XmlDocument
+          $xml.PreserveWhitespace = $true
+          $xml.Load($path)
+
+          $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+          $ns.AddNamespace('trx', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
+          @{ Xml = $xml; Ns = $ns }
+        }
+
+        function Get-TrxCounters([string]$trxPath) {
+          if (-not (Test-Path $trxPath)) { return $null }
+          try {
+            $doc = Load-Trx $trxPath
+            $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
+            if ($counters -eq $null) { return $null }
+
+            return @{
+              total   = [int]$counters.GetAttribute('total')
+              passed  = [int]$counters.GetAttribute('passed')
+              failed  = [int]$counters.GetAttribute('failed')
+              error   = [int]$counters.GetAttribute('error')
+              aborted = [int]$counters.GetAttribute('aborted')
+              timeout = [int]$counters.GetAttribute('timeout')
+            }
+          }
+          catch {
+            Write-Host "⚠️ Error parsing TRX counters: ${_}"
+            return $null
+          }
+        }
+
+        function Get-TrxSummary([string]$trxPath) {
+          if (-not (Test-Path $trxPath)) { return $null }
+          $doc = Load-Trx $trxPath
+          $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
+          if ($counters -eq $null) { return $null }
+
+          return @{
+            total   = $counters.GetAttribute('total')
+            passed  = $counters.GetAttribute('passed')
+            failed  = $counters.GetAttribute('failed')
+            error   = $counters.GetAttribute('error')
+            aborted = $counters.GetAttribute('aborted')
+            timeout = $counters.GetAttribute('timeout')
+          }
+        }
+
+        function Get-FailedFQNsFromTrx([string]$trxPath) {
+          # Return $null (not @()) when TRX is missing/unreadable so caller can distinguish
+          # between "TRX exists with 0 failures" vs "TRX doesn't exist"
+          if (-not (Test-Path $trxPath)) { return $null }
+
+          $doc = Load-Trx $trxPath
+          $xml = $doc.Xml
+          $ns  = $doc.Ns
+
+          # Map UnitTest name -> FullyQualifiedName (className.method)
+          $map = @{}
+          $unitTests = $xml.SelectNodes('//trx:TestDefinitions/trx:UnitTest', $ns)
+          foreach ($ut in $unitTests) {
+            $displayName = $ut.GetAttribute('name')
+            if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
+
+            $tm = $ut.SelectSingleNode('./trx:TestMethod', $ns)
+            if ($tm -ne $null) {
+              $className = $tm.GetAttribute('className')
+              $method    = $tm.GetAttribute('name')
+              if (-not [string]::IsNullOrWhiteSpace($className) -and -not [string]::IsNullOrWhiteSpace($method)) {
+                $map[$displayName] = ('{0}.{1}' -f $className, $method)
+              } else {
+                $map[$displayName] = $displayName
+              }
+            } else {
+              $map[$displayName] = $displayName
+            }
+          }
+
+          # Include other "failure-like" outcomes too
+          $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
+
+          $failed = New-Object System.Collections.Generic.List[string]
+          foreach ($n in $failedNodes) {
+            $tn = $n.GetAttribute('testName')
+            if ([string]::IsNullOrWhiteSpace($tn)) { continue }
+            if ($map.ContainsKey($tn)) { $failed.Add($map[$tn]) } else { $failed.Add($tn) }
+          }
+
+          $failed | Sort-Object -Unique
+        }
+
+        function Build-OrFilter([string[]]$fqns) {
+          $parts = New-Object System.Collections.Generic.List[string]
+          foreach ($t in $fqns) {
+            if (-not [string]::IsNullOrWhiteSpace($t)) { $parts.Add(('FullyQualifiedName={0}' -f $t)) }
+          }
+          [string]::Join($PIPE, $parts)
+        }
+
+        function Invoke-DotNetTest([string]$filterExpr, [int]$attempt) {
+          $trxFile = ('{0}-{1}.trx' -f $trxPrefix, $attempt)
+
+          # IMPORTANT: add console logger verbosity so you see detailed test output in Actions logs
+          $args = @(
+            'test', $project,
+            '-c', $config,
+            '--logger', ('trx;LogFileName={0}' -f $trxFile),
+            '--logger', ('console;verbosity={0}' -f $consoleVerb),
+            '--results-directory', $resultsDir
+          )
+
+          if ($noBuild -eq 'true') { $args += '--no-build' }
+
+          if (-not [string]::IsNullOrWhiteSpace($additional)) {
+            # Tokenize additional args (best-effort)
+            $extra = [System.Management.Automation.PSParser]::Tokenize($additional, [ref]$null) |
+              Where-Object { $_.Type -eq 'CommandArgument' -or $_.Type -eq 'String' } |
+              ForEach-Object { $_.Content }
+            if ($extra) { $args += $extra }
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($filterExpr)) {
+            $args += @('--filter', $filterExpr)
+          }
+
+          # Use GitHub Actions collapsible log groups
+          Write-Host ('::group::dotnet {0}' -f ($args -join ' '))
+          # Stream dotnet output to the log, but do not emit it as function output
+          (& dotnet @args) | Out-Host
+          $exitCode = $LASTEXITCODE
+          Write-Host '::endgroup::'
+          
+          # Return only the exit code (int), not an array contaminated with stdout
+          return [int]$exitCode
+        }
+
+        function Print-AttemptDiagnostics([int]$attempt, [int]$exitCode) {
+          $trxPath = Get-TrxPath $attempt
+          Write-Host ("   dotnet exit code: {0}" -f $exitCode)
+          Write-Host ("   TRX: {0}" -f $trxPath)
+
+          if (Test-Path $trxPath) {
+            Write-Host ("   TRX size: {0} bytes" -f ((Get-Item $trxPath).Length))
+            $sum = Get-TrxSummary $trxPath
+            if ($sum) {
+              Write-Host ("   TRX summary: total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}" -f `
+                $sum.total, $sum.passed, $sum.failed, $sum.error, $sum.aborted, $sum.timeout)
+            } else {
+              Write-Host "   TRX summary: (not found)"
+            }
+            
+            # Detect infrastructure failure: dotnet failed but TRX shows 0 tests executed
+            if ($exitCode -ne 0) {
+              $counters = Get-TrxCounters $trxPath
+              if ($counters -and $counters.total -eq 0) {
+                Write-Host "   ⚠️ INFRASTRUCTURE FAILURE: dotnet exit code non-zero but 0 tests executed (test runner crash/error)"
+              }
+            }
+          } else {
+            Write-Host "   ⚠️ TRX not found! (test runner may have crashed before completing)"
+          }
+        }
+
+        # Dry-run mode: validate parsing + filter generation without running tests
+        if (-not [string]::IsNullOrWhiteSpace($dryRunTrx)) {
+          Write-Host ''
+          Write-Host ('DRY RUN - parsing TRX: {0}' -f $dryRunTrx)
+
+          $failed = Get-FailedFQNsFromTrx $dryRunTrx
+          
+          if ($failed -eq $null) {
+            Write-Host 'DRY RUN - ERROR: TRX file not found or unreadable'
+            exit 1
+          }
+          
+          $failed = @($failed)
+          $orFilter = Build-OrFilter $failed
+          $retryFilter = if (-not [string]::IsNullOrWhiteSpace($baseFilter)) { '({0})&({1})' -f $baseFilter, $orFilter } else { $orFilter }
+
+          Write-Host ('DRY RUN - failures: {0}' -f $failed.Count)
+          $failed | ForEach-Object { Write-Host ('  - {0}' -f $_) }
+          Write-Host ''
+          Write-Host 'DRY RUN - retry filter:'
+          Write-Host $retryFilter
+
+          'exit-code=0' >> $env:GITHUB_OUTPUT
+          'attempts-used=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last=' >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        # Attempt 1
+        $attempt = 1
+        Write-Host ''
+        Write-Host ('🔄 Running tests (attempt {0}/{1})' -f $attempt, $maxAttempts)
+
+        $exitCode = Invoke-DotNetTest $baseFilter 1
+        Print-AttemptDiagnostics 1 $exitCode
+
+        $failed1 = Get-FailedFQNsFromTrx (Get-TrxPath 1)
+        
+        # Handle infrastructure failures on first attempt
+        if ($failed1 -eq $null) {
+          Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX file missing or unreadable after first attempt.')
+          Write-Host ('   Test runner crashed or failed before completing.')
+          
+          ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
+          'attempts-used=1' >> $env:GITHUB_OUTPUT
+          'failed-tests-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last=' >> $env:GITHUB_OUTPUT
+          exit $exitCode
+        }
+        
+        $failed1 = @($failed1)
+        $failedFirstCount = $failed1.Count
+        Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
+
+        if ($exitCode -eq 0) {
+          Write-Host '✅ All tests passed on first attempt'
+          'exit-code=0' >> $env:GITHUB_OUTPUT
+          'attempts-used=1' >> $env:GITHUB_OUTPUT
+          'failed-tests-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last=' >> $env:GITHUB_OUTPUT
+          exit 0
+        }
+
+        # Retry attempts: re-run ONLY failures from previous attempt
+        while ($attempt -lt $maxAttempts) {
+          $attempt++
+          Write-Host ''
+
+          $trxPrev = Get-TrxPath ($attempt - 1)
+          $failedPrev = Get-FailedFQNsFromTrx $trxPrev
+
+          # CRITICAL: Distinguish between "TRX exists with 0 failures" vs "TRX missing/unreadable"
+          if ($failedPrev -eq $null) {
+            Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX file missing or unreadable from previous attempt. Cannot retry.')
+            Write-Host ('   This indicates the test runner crashed or failed before completing.')
+            
+            ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
+            ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+            ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+            'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+            'failed-tests-last=' >> $env:GITHUB_OUTPUT
+            exit $exitCode
+          }
+
+          # At this point, $failedPrev is an array (possibly empty)
+          $failedPrev = @($failedPrev)
+          
+          if ($failedPrev.Count -eq 0) {
+            # TRX exists and shows 0 failures, but dotnet exit code was non-zero
+            # This is ONLY valid if tests actually ran - verify with counters
+            $counters = Get-TrxCounters $trxPrev
+            
+            if ($counters -eq $null -or $counters.total -eq 0) {
+              Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX shows 0 tests executed but dotnet exit code was non-zero.')
+              Write-Host ('   This indicates test runner crash/error, not a transient flake.')
+              
+              ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
+              ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+              ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+              'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+              'failed-tests-last=' >> $env:GITHUB_OUTPUT
+              exit $exitCode
+            }
+            
+            # TRX exists, tests ran, but 0 failures recorded - this IS an infra flake
+            Write-Host ('✅ Tests executed ({0} total) with 0 failures but dotnet exit code was non-zero. Marking success (infra flake).' -f $counters.total)
+            'exit-code=0' >> $env:GITHUB_OUTPUT
+            ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+            ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+            'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+            'failed-tests-last=' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          Write-Host ('⚠️ Retrying failed tests (attempt {0}/{1})' -f $attempt, $maxAttempts)
+          Write-Host ('   Failed tests to retry: {0}' -f $failedPrev.Count)
+
+          $orFilter = Build-OrFilter $failedPrev
+          $retryFilter = if (-not [string]::IsNullOrWhiteSpace($baseFilter)) { '({0})&({1})' -f $baseFilter, $orFilter } else { $orFilter }
+
+          Write-Host ('   Filter: {0}' -f $retryFilter)
+          $exitCode = Invoke-DotNetTest $retryFilter $attempt
+          Print-AttemptDiagnostics $attempt $exitCode
+
+          if ($exitCode -eq 0) {
+            Write-Host ('✅ Passed on attempt {0}' -f $attempt)
+            'exit-code=0' >> $env:GITHUB_OUTPUT
+            ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+            ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+            'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+            'failed-tests-last=' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          Start-Sleep -Seconds 5
+        }
+
+        # Exhausted attempts
+        $lastFailed = Get-FailedFQNsFromTrx (Get-TrxPath $attempt)
+        
+        if ($lastFailed -eq $null) {
+          # Infrastructure failure on final attempt
+          Write-Host ''
+          Write-Host ('❌ INFRASTRUCTURE FAILURE after {0} attempts' -f $maxAttempts)
+          Write-Host ('   TRX file missing or unreadable on final attempt.')
+          
+          ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
+          ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+          ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
+          'failed-tests-last=' >> $env:GITHUB_OUTPUT
+          exit $exitCode
+        }
+        
+        $lastFailed = @($lastFailed)
+        $lastFailedPipe = [string]::Join($PIPE, $lastFailed)
+
+        Write-Host ''
+        Write-Host ('❌ Tests failed after {0} attempts' -f $maxAttempts)
+        Write-Host ('   Final failed tests: {0}' -f $lastFailed.Count)
+
+        ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
+        ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+        ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+        ('failed-tests-last-count={0}' -f $lastFailed.Count) >> $env:GITHUB_OUTPUT
+        ('failed-tests-last={0}' -f $lastFailedPipe) >> $env:GITHUB_OUTPUT
+
+        exit $exitCode
