@@ -1,6 +1,7 @@
 name: 'Smart .NET Test Retry'
 description: 'Run dotnet tests with smart retry - only re-runs failed tests instead of entire suite'
 author: 'DevOps Team'
+# v4.3.0: Fixed critical infrastructure failure detection bug
 
 inputs:
   project:
