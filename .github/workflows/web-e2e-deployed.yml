@@ -65,6 +65,12 @@ on:
         type: boolean
         default: false
       
+      console_verbosity:
+        description: 'Console logger verbosity for dotnet test (quiet, minimal, normal, detailed, diagnostic)'
+        required: false
+        type: string
+        default: 'normal'
+      
       # Infrastructure
       node_version:
         description: 'Node.js version for Playwright tests'
@@ -567,7 +573,7 @@ jobs:
           max-attempts: ${{ inputs.e2e_retry_attempts }}
           results-directory: ./TestResults
           trx-filename-prefix: reqnroll-results
-          console-verbosity: detailed
+          console-verbosity: ${{ inputs.console_verbosity }}
       
       # Run Playwright Tests
       - name: Run Playwright tests

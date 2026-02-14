@@ -59,6 +59,11 @@ on:
         required: false
         type: boolean
         default: false
+      console_verbosity:
+        description: 'Console logger verbosity for dotnet test (quiet, minimal, normal, detailed, diagnostic)'
+        required: false
+        type: string
+        default: 'normal'
       postgres_db:
         description: 'PostgreSQL database name'
         required: false
@@ -750,7 +755,7 @@ jobs:
           results-directory: ./TestResults
           configuration: Release
           no-build: true
-          console-verbosity: detailed
+          console-verbosity: ${{ inputs.console_verbosity }}
           trx-filename-prefix: e2e-attempt
 
       - name: Run Playwright tests
