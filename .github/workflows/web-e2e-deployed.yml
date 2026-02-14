@@ -354,12 +354,12 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
           cache: 'npm'
-          cache-dependency-path: ${{ inputs.web_directory }}/package-lock.json
+          cache-dependency-path: caller/${{ inputs.web_directory }}/package-lock.json
       
       # Install Playwright dependencies
       - name: Install Playwright dependencies
         if: inputs.run_playwright_tests && inputs.web_directory != ''
-        working-directory: ${{ inputs.web_directory }}
+        working-directory: caller/${{ inputs.web_directory }}
         run: |
           npm ci
           npx playwright install --with-deps
@@ -578,7 +578,7 @@ jobs:
       # Run Playwright Tests
       - name: Run Playwright tests
         if: inputs.run_playwright_tests && inputs.web_directory != ''
-        working-directory: ${{ inputs.web_directory }}
+        working-directory: caller/${{ inputs.web_directory }}
         env:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
