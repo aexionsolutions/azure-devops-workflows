@@ -58,6 +58,18 @@ on:
         required: false
         type: string
         default: ''
+      b2c_authority:
+        required: false
+        type: string
+        default: ''
+      b2c_client_id:
+        required: false
+        type: string
+        default: ''
+      b2c_scope:
+        required: false
+        type: string
+        default: ''
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -70,6 +82,10 @@ on:
       B2C_TEST_USER_EMAIL:
         required: false
       B2C_TEST_USER_PASSWORD:
+        required: false
+      e2e_secrets:
+        required: false
+      b2c_client_secret:
         required: false
 
 permissions:
@@ -368,6 +384,12 @@ jobs:
       - name: Web smoke (Playwright)
         uses: ./shared/.github/actions/playwright-smoke
         env:
+          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
+          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret }}
+          B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+          B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
+          B2C_SCOPE: ${{ inputs.b2c_scope }}
+          # Legacy fallback for workflows that don't use E2E_SECRETS_JSON
           B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
         with:
