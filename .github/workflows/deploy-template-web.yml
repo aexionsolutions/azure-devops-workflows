@@ -70,6 +70,11 @@ on:
         required: false
         type: string
         default: ''
+      web_directory:
+        description: 'Path to the web project directory with Playwright config (e.g., web/tems-portal, rx-web)'
+        required: false
+        type: string
+        default: 'web'
     secrets:
       AZURE_CLIENT_ID:
         required: false
@@ -375,10 +380,11 @@ jobs:
           USE_SLOT: ${{ needs.deploy-staging.outputs.use_slot }}
         run: |
           if [ -n "$PROVIDED" ]; then echo "url=$PROVIDED" >> $GITHUB_OUTPUT; exit 0; fi
+          APP="${{ inputs.app-name }}"
           if [ "$USE_SLOT" = "true" ]; then
-            echo "url=https://tems-${ENV}-web-staging.azurewebsites.net" >> $GITHUB_OUTPUT
+            echo "url=https://${APP}-staging.azurewebsites.net" >> $GITHUB_OUTPUT
           else
-            echo "url=https://tems-${ENV}-web.azurewebsites.net" >> $GITHUB_OUTPUT
+            echo "url=https://${APP}.azurewebsites.net" >> $GITHUB_OUTPUT
           fi
 
       - name: Web smoke (Playwright)
@@ -393,6 +399,7 @@ jobs:
           B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
         with:
+          working-directory: caller/${{ inputs.web_directory || 'web' }}
           base-url: ${{ steps.base.outputs.url }}
           artifact-name: web-playwright-${{ inputs.environment }}
           run-auth-smoke: 'true'

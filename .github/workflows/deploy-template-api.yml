@@ -408,10 +408,11 @@ jobs:
           USE_SLOT: ${{ needs.deploy-staging.outputs.use_slot }}
         run: |
           if [ -n "$PROVIDED" ]; then echo "url=$PROVIDED" >> $GITHUB_OUTPUT; exit 0; fi
+          APP="${{ inputs.app-name }}"
           if [ "$USE_SLOT" = "true" ]; then
-            echo "url=https://tems-${ENV}-api-staging.azurewebsites.net" >> $GITHUB_OUTPUT
+            echo "url=https://${APP}-staging.azurewebsites.net" >> $GITHUB_OUTPUT
           else
-            echo "url=https://tems-${ENV}-api.azurewebsites.net" >> $GITHUB_OUTPUT
+            echo "url=https://${APP}.azurewebsites.net" >> $GITHUB_OUTPUT
           fi
 
       - name: Resolve Resource Group (verify)
