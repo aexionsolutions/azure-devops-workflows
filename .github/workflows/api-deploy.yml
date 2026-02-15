@@ -1,6 +1,6 @@
 name: API Build (Artifact Only)
 # NOTE: Environment deployments are centralized in promote-release.yml.
-# This workflow builds and packages api.zip only (build or manual seed to a release tag).
+# This workflow builds and packages api.zip only (called via workflow_call from release-create.yml or manually via workflow_dispatch).
 
 on:
   workflow_call:
@@ -42,10 +42,7 @@ on:
         description: 'Concurrency group name (e.g., tems-api-build, ravenxpress-api-build)'
         required: true
         type: string
-        
-  push:
-    tags:
-      - 'v*'
+
   workflow_dispatch:
     inputs:
       git_ref:
@@ -92,8 +89,7 @@ jobs:
   build-test-deploy:
     name: Build & Package
     runs-on: ubuntu-latest
-    # Build for tag pushes (to create durable release assets) OR any manual run
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     env:
       PACKAGE: api.zip
       BRANCH_NAME: "${{ github.ref_name || github.event.repository.default_branch || 'main' }}"
@@ -116,14 +112,10 @@ jobs:
           echo "Inputs.release_tag:  ${{ inputs.release_tag }}"
           echo ""
           echo "Expected behavior:"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.release_tag }}" ]; then
+          if [ -n "${{ inputs.release_tag }}" ]; then
             echo "✓ SEED MODE: Will build api.zip and attach to release ${{ inputs.release_tag }}"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "✓ BUILD MODE: Will build api.zip as workflow artifact (no release attachment)"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "✓ TAG BUILD: Will build and attach to this tag"
           else
-            echo "✓ DEPLOY MODE: Will download from release and deploy"
+            echo "✓ BUILD MODE: Will build api.zip as workflow artifact (no release attachment)"
           fi
 
       - name: Resolve shared workflows ref
@@ -283,24 +275,6 @@ jobs:
           set -euo pipefail
           rm -f api-tests.zip || true
           zip -r api-tests.zip $(dirname ${{ inputs.unit_test_project }}) -x "**/bin/**" "**/obj/**"
-
-      - name: Attach api-tests.zip to Release (tag build)
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.derive_version.outputs.version }}
-          name: ${{ steps.derive_version.outputs.version }}
-          files: caller/api-tests.zip
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Attach api.zip to Release (tag build)
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.derive_version.outputs.version }}
-          name: ${{ steps.derive_version.outputs.version }}
-          files: caller/${{ env.PACKAGE }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Inspect release state (seed)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.release_tag != '' && steps.mode.outputs.mode == 'seed'
