@@ -71,6 +71,21 @@ on:
         type: boolean
         description: 'Enforce coverage thresholds. Set to false for time-travel testing (e.g., promote-release) where coverage was already validated.'
         default: true
+      unit_test_project:
+        required: false
+        type: string
+        description: 'Path to unit test project (e.g., tests/RavenXpress.UnitTests/RavenXpress.UnitTests.csproj). Auto-detected if omitted: finds first *UnitTest* or *Unit.Test* csproj under tests/.'
+        default: ''
+      integration_test_project:
+        required: false
+        type: string
+        description: 'Path to integration test project (e.g., tests/RavenXpress.IntegrationTests/RavenXpress.IntegrationTests.csproj). Auto-detected if omitted: finds first *IntegrationTest* csproj under tests/.'
+        default: ''
+      postgres_db:
+        required: false
+        type: string
+        description: 'PostgreSQL database name for integration tests (default: ci_test)'
+        default: 'ci_test'
       coverage_assembly_filters:
         required: false
         type: string
@@ -108,7 +123,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: test_password_123
-          POSTGRES_DB: Tems_test
+          POSTGRES_DB: ${{ inputs.postgres_db || 'ci_test' }}
         ports:
           - 5432:5432
         # Health checks ensure PostgreSQL is ready before tests
@@ -226,10 +241,38 @@ jobs:
       - name: Build
         run: dotnet build ${{ inputs.solution }} -c Release --no-restore
 
+      - name: Resolve test projects
+        id: test_projects
+        shell: bash
+        run: |
+          # Resolve unit test project
+          UNIT="${{ inputs.unit_test_project }}"
+          if [ -z "$UNIT" ]; then
+            UNIT=$(find tests -maxdepth 2 -name '*UnitTest*.csproj' -o -name '*Unit.Test*.csproj' 2>/dev/null | head -n1)
+          fi
+          if [ -z "$UNIT" ]; then
+            echo "::error::No unit test project found. Set 'unit_test_project' input or ensure a *UnitTest*.csproj exists under tests/."
+            exit 1
+          fi
+          echo "unit=$UNIT" >> $GITHUB_OUTPUT
+          echo "Resolved unit test project: $UNIT"
+          
+          # Resolve integration test project (only if integration tests enabled)
+          INTEG="${{ inputs.integration_test_project }}"
+          if [ -z "$INTEG" ]; then
+            INTEG=$(find tests -maxdepth 2 -name '*IntegrationTest*.csproj' -o -name '*Integration.Test*.csproj' 2>/dev/null | head -n1)
+          fi
+          echo "integration=$INTEG" >> $GITHUB_OUTPUT
+          if [ -n "$INTEG" ]; then
+            echo "Resolved integration test project: $INTEG"
+          else
+            echo "No integration test project resolved (will skip if run_integration is true)"
+          fi
+
       - name: Unit Tests + Coverage (OpenCover)
         run: |
           echo "### Running Unit Tests (Fast Feedback)" >> "$GITHUB_STEP_SUMMARY"
-          dotnet test tests/Ems.UnitTests/Ems.UnitTests.csproj \
+          dotnet test ${{ steps.test_projects.outputs.unit }} \
             -c Release --no-build \
             --collect:"XPlat Code Coverage" \
             --logger "trx;LogFileName=unit.trx" \
@@ -260,10 +303,10 @@ jobs:
           cat coverage-report/Summary.txt || true
 
       - name: Integration Tests + Coverage (OpenCover)
-        if: inputs.run_integration == true
+        if: inputs.run_integration == true && steps.test_projects.outputs.integration != ''
         env:
           # Connection string for Docker PostgreSQL service
-          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=Tems_test;Username=postgres;Password=test_password_123"
+          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
         run: |
           echo "### Running Integration Tests (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
           echo "Using Docker PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
@@ -272,7 +315,7 @@ jobs:
           echo "✅ PostgreSQL service ready (verified by service health checks)" >> "$GITHUB_STEP_SUMMARY"
           
           # Run integration tests with Docker PostgreSQL
-          dotnet test tests/Ems.IntegrationTests/Ems.IntegrationTests.csproj \
+          dotnet test ${{ steps.test_projects.outputs.integration }} \
             -c Release --no-build \
             --collect:"XPlat Code Coverage" \
             --logger "trx;LogFileName=integration.trx" \

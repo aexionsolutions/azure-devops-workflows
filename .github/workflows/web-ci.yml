@@ -10,7 +10,7 @@ on:
       working_directory:
         required: false
         type: string
-        default: tems-web
+        default: web
       run_tests:
         required: false
         type: boolean
