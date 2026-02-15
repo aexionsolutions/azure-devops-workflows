@@ -61,7 +61,8 @@ runs:
         esac
         # Pattern fallback if still empty (e.g., when no secrets are set)
         if [ -z "$RG_USE" ] && [ -n "$ENV" ]; then
-          RG_USE="tems-${ENV}-rg"
+          echo "::error::No resource group resolved for environment '${ENV}'. Provide a resource-group input or set AZURE_RG_<ENV> secret."
+          exit 1
         fi
         echo "resource-group=$RG_USE" >> $GITHUB_OUTPUT
         # Optional existence verification

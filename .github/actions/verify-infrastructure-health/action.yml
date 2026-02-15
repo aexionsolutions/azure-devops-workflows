@@ -12,12 +12,12 @@ inputs:
     required: false
     default: 'false'
   postgres-server-name:
-    description: "PostgreSQL server name (auto-detected if empty: tems-{env}-pg)"
-    required: false
+    description: "PostgreSQL server name (e.g., tems-dev-pg, ravenxpress-dev-pg)"
+    required: true
     default: ''
   key-vault-name:
-    description: "Key Vault name (auto-detected if empty: tems-{env}-kv)"
-    required: false
+    description: "Key Vault name (e.g., tems-dev-kv, ravenxpress-dev-kv)"
+    required: true
     default: ''
   timeout-seconds:
     description: "Maximum time to wait for resources to become ready"
@@ -35,8 +35,16 @@ runs:
         KV_INPUT: ${{ inputs.key-vault-name }}
       run: |
         set -euo pipefail
-        PG="${PG_INPUT:-tems-${ENV}-pg}"
-        KV="${KV_INPUT:-tems-${ENV}-kv}"
+        PG="${PG_INPUT}"
+        KV="${KV_INPUT}"
+        if [ -z "$PG" ]; then
+          echo "::error::postgres-server-name is required. Pass it explicitly (e.g., tems-dev-pg or ravenxpress-dev-pg)."
+          exit 1
+        fi
+        if [ -z "$KV" ]; then
+          echo "::error::key-vault-name is required. Pass it explicitly (e.g., tems-dev-kv or ravenxpress-dev-kv)."
+          exit 1
+        fi
         echo "postgres=$PG" >> $GITHUB_OUTPUT
         echo "keyvault=$KV" >> $GITHUB_OUTPUT
         echo "📋 Resource names: PostgreSQL=$PG, KeyVault=$KV"
