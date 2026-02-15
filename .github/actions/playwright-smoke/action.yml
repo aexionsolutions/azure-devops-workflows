@@ -3,8 +3,7 @@ description: "Installs deps, runs Playwright tests against a BASE_URL, uploads r
 inputs:
   working-directory:
     description: Path to the web app with Playwright config
-    required: false
-    default: web/tems-portal
+    required: true
   base-url:
     description: Base URL to test against
     required: true
