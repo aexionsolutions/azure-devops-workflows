@@ -411,6 +411,13 @@ jobs:
   # Separate job to run integration tests concurrently with unit tests + SonarCloud.
   # Each job builds independently (~1.5 min build cost) to avoid artifact overhead.
   # Net saving: ~7 min wall-clock (unit ~6 min + integration ~7 min sequential → max(6, 7) parallel).
+  # NOTE for repositories using this reusable workflow:
+  #   - Branch protection rules that require specific checks must include BOTH `ci`
+  #     and `integration-tests` (if `run_integration` is enabled), otherwise merges
+  #     may be allowed when only `ci` has passed.
+  #   - The `ci` job can complete and report "passed" while `integration-tests` is
+  #     still running or has failed; rely on the overall workflow status or wait for
+  #     both jobs when treating "CI complete" as "all tests passed".
   integration-tests:
     if: inputs.run_integration == true
     runs-on: ubuntu-latest
