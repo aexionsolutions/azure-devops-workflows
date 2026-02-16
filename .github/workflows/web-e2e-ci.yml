@@ -775,8 +775,18 @@ jobs:
           
           if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
             echo "ℹ️  Running smoke tests only..."
-            if [ -f "smoke.spec.ts" ] || [ -f "tests/smoke.spec.ts" ] || [ -f "e2e/smoke.spec.ts" ]; then
-              npx playwright test smoke.spec.ts --reporter=list
+            # Search common locations for smoke.spec.ts
+            smoke_file=""
+            for candidate in "smoke.spec.ts" "tests/smoke.spec.ts" "e2e/smoke.spec.ts" "tests/e2e/smoke/smoke.spec.ts" "tests/e2e/smoke.spec.ts"; do
+              if [ -f "$candidate" ]; then
+                smoke_file="$candidate"
+                break
+              fi
+            done
+            
+            if [ -n "$smoke_file" ]; then
+              echo "   Found: $smoke_file"
+              npx playwright test "$smoke_file" --reporter=list
             else
               echo "⚠️  No smoke.spec.ts found, running tests with @smoke tag..."
               npx playwright test --grep @smoke --reporter=list
