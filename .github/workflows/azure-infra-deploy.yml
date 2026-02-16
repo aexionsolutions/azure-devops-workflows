@@ -285,8 +285,32 @@ jobs:
             echo "::add-mask::$PG_SECRET"
             echo "value=$PG_SECRET" >> $GITHUB_OUTPUT
           else
-            echo "Auto-generating PostgreSQL admin password (32-char alphanumeric)"
-            PG_PASS=$(openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-32)
+            echo "Auto-generating PostgreSQL admin password (32-char, with complexity checks)"
+            MAX_GEN_ATTEMPTS=10
+            MIN_LEN=16
+            PG_PASS=""
+
+            for _ in $(seq 1 "$MAX_GEN_ATTEMPTS"); do
+              CANDIDATE=$(openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-32)
+
+              # Ensure non-empty and minimum length
+              if [ -z "$CANDIDATE" ] || [ "${#CANDIDATE}" -lt "$MIN_LEN" ]; then
+                continue
+              fi
+
+              # Require at least one uppercase, one lowercase, and one digit
+              if echo "$CANDIDATE" | grep -q '[A-Z]' && \
+                 echo "$CANDIDATE" | grep -q '[a-z]' && \
+                 echo "$CANDIDATE" | grep -q '[0-9]'; then
+                PG_PASS="$CANDIDATE"
+                break
+              fi
+            done
+
+            if [ -z "$PG_PASS" ]; then
+              echo "Failed to auto-generate a compliant PostgreSQL admin password after $MAX_GEN_ATTEMPTS attempts." >&2
+              exit 1
+            fi
             echo "::add-mask::$PG_PASS"
             echo "value=$PG_PASS" >> $GITHUB_OUTPUT
           fi
