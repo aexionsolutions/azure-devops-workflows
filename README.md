@@ -383,7 +383,7 @@ SONAR_PROJECT_KEY       # SonarCloud project key
 
 ### Environment Secrets (per environment)
 ```
-POSTGRES_ADMIN_PASSWORD  # PostgreSQL admin password
+POSTGRES_ADMIN_PASSWORD  # PostgreSQL admin password (optional — auto-generated if not set)
 ```
 
 ---
