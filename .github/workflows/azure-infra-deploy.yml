@@ -190,7 +190,33 @@ jobs:
         if: inputs.validate_secrets == true
         shell: bash
         run: |
-          echo "[OK] Required Azure secrets validated via OIDC login"
+          set -e
+          
+          echo "[INFO] Validating required Azure secrets..."
+          
+          MISSING=0
+          
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ]; then
+            echo "[ERROR] Missing required secret: AZURE_CLIENT_ID"
+            MISSING=1
+          fi
+          
+          if [ -z "${{ secrets.AZURE_TENANT_ID }}" ]; then
+            echo "[ERROR] Missing required secret: AZURE_TENANT_ID"
+            MISSING=1
+          fi
+          
+          if [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "[ERROR] Missing required secret: AZURE_SUBSCRIPTION_ID"
+            MISSING=1
+          fi
+          
+          if [ "$MISSING" -ne 0 ]; then
+            echo "[FAIL] One or more required Azure secrets are missing. Aborting as requested by validate_secrets mode."
+            exit 1
+          fi
+          
+          echo "[OK] All required Azure secrets are present."
 
       - name: Resolve PostgreSQL server name
         id: pg
