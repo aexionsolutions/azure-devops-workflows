@@ -2,6 +2,7 @@ name: 'Smart .NET Test Retry'
 description: 'Run dotnet tests with smart retry - only re-runs failed tests instead of entire suite'
 author: 'DevOps Team'
 # v4.3.0: Fixed critical infrastructure failure detection bug
+# v4.3.2: TRX missing on retry → fall back to last known failure list instead of aborting
 
 inputs:
   project:
@@ -70,6 +71,9 @@ runs:
       run: |
         $ErrorActionPreference = 'Continue'
 
+        # Ensure PowerShell 7.3+ correctly quotes native command arguments
+        $PSNativeCommandArgumentPassing = 'Standard'
+
         # Avoid literal pipe in the script text (some runner/masking combos cause parsing issues)
         $PIPE = [char]124
 
@@ -132,26 +136,39 @@ runs:
 
         function Get-TrxSummary([string]$trxPath) {
           if (-not (Test-Path $trxPath)) { return $null }
-          $doc = Load-Trx $trxPath
-          $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
-          if ($counters -eq $null) { return $null }
+          try {
+            $doc = Load-Trx $trxPath
+            $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
+            if ($counters -eq $null) { return $null }
 
-          return @{
-            total   = $counters.GetAttribute('total')
-            passed  = $counters.GetAttribute('passed')
-            failed  = $counters.GetAttribute('failed')
-            error   = $counters.GetAttribute('error')
-            aborted = $counters.GetAttribute('aborted')
-            timeout = $counters.GetAttribute('timeout')
+            return @{
+              total   = $counters.GetAttribute('total')
+              passed  = $counters.GetAttribute('passed')
+              failed  = $counters.GetAttribute('failed')
+              error   = $counters.GetAttribute('error')
+              aborted = $counters.GetAttribute('aborted')
+              timeout = $counters.GetAttribute('timeout')
+            }
+          }
+          catch {
+            Write-Host ("⚠️ Error parsing TRX summary: {0}" -f $_.Exception.Message)
+            return $null
           }
         }
 
         function Get-FailedFQNsFromTrx([string]$trxPath) {
           # Return $null (not @()) when TRX is missing/unreadable so caller can distinguish
-          # between "TRX exists with 0 failures" vs "TRX doesn't exist"
+          # between "TRX exists with 0 failures" vs "TRX doesn't exist/corrupt"
           if (-not (Test-Path $trxPath)) { return $null }
 
-          $doc = Load-Trx $trxPath
+          try {
+            $doc = Load-Trx $trxPath
+          }
+          catch {
+            Write-Host ("   ⚠️ TRX file exists but is corrupt/truncated: {0}" -f $_.Exception.Message)
+            return $null
+          }
+
           $xml = $doc.Xml
           $ns  = $doc.Ns
 
@@ -194,9 +211,22 @@ runs:
         }
 
         function Build-OrFilter([string[]]$fqns) {
+          # Strip NUnit/xUnit parameterized test arguments from FQNs to avoid shell quoting issues.
+          # e.g. Class.Method("arg1","arg2") → Class.Method
+          # Embedded quotes, parens, ampersands, and commas in param values break PowerShell's
+          # native command argument passing, causing MSBuild to receive broken switches.
+          # Trade-off: uses ~ (contains) matching, so all parameterizations of a method are retried.
           $parts = New-Object System.Collections.Generic.List[string]
+          $seen  = @{}
           foreach ($t in $fqns) {
-            if (-not [string]::IsNullOrWhiteSpace($t)) { $parts.Add(('FullyQualifiedName={0}' -f $t)) }
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            $clean = $t
+            $parenIdx = $clean.IndexOf('(')
+            if ($parenIdx -gt 0) { $clean = $clean.Substring(0, $parenIdx) }
+            if (-not $seen.ContainsKey($clean)) {
+              $seen[$clean] = $true
+              $parts.Add(('FullyQualifiedName~{0}' -f $clean))
+            }
           }
           [string]::Join($PIPE, $parts)
         }
@@ -331,6 +361,7 @@ runs:
         
         $failed1 = @($failed1)
         $failedFirstCount = $failed1.Count
+        $lastKnownFailed = $failed1
         Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
 
         # Retry attempts: re-run ONLY failures from previous attempt
@@ -343,19 +374,13 @@ runs:
 
           # CRITICAL: Distinguish between "TRX exists with 0 failures" vs "TRX missing/unreadable"
           if ($failedPrev -eq $null) {
-            Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX file missing or unreadable from previous attempt. Cannot retry.')
-            Write-Host ('   This indicates the test runner crashed or failed before completing.')
-            
-            ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
-            ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
-            ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
-            'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-            'failed-tests-last=' >> $env:GITHUB_OUTPUT
-            exit $exitCode
+            Write-Host ('   ⚠️ TRX from attempt {0} missing — falling back to last known failure list ({1} tests).' -f ($attempt - 1), $lastKnownFailed.Count)
+            $failedPrev = $lastKnownFailed
           }
 
           # At this point, $failedPrev is an array (possibly empty)
           $failedPrev = @($failedPrev)
+          if ($failedPrev.Count -gt 0) { $lastKnownFailed = $failedPrev }
           
           if ($failedPrev.Count -eq 0) {
             # TRX exists and shows 0 failures, but dotnet exit code was non-zero
@@ -411,24 +436,23 @@ runs:
         $lastFailed = Get-FailedFQNsFromTrx (Get-TrxPath $attempt)
         
         if ($lastFailed -eq $null) {
-          # Infrastructure failure on final attempt
           Write-Host ''
-          Write-Host ('❌ INFRASTRUCTURE FAILURE after {0} attempts' -f $maxAttempts)
-          Write-Host ('   TRX file missing or unreadable on final attempt.')
-          
-          ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
-          ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
-          ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
-          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-          'failed-tests-last=' >> $env:GITHUB_OUTPUT
-          exit $exitCode
+          Write-Host ('   ⚠️ TRX from final attempt missing — using last known failure list ({0} tests).' -f $lastKnownFailed.Count)
+          $lastFailed = $lastKnownFailed
         }
         
         $lastFailed = @($lastFailed)
         $lastFailedPipe = [string]::Join($PIPE, $lastFailed)
 
+        # Show the TRX summary from the first attempt (full test suite run)
+        $firstTrxSum = Get-TrxSummary (Get-TrxPath 1)
+
         Write-Host ''
         Write-Host ('❌ Tests failed after {0} attempts' -f $maxAttempts)
+        if ($firstTrxSum) {
+          Write-Host ('   TRX summary (attempt 1): total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}' -f `
+            $firstTrxSum.total, $firstTrxSum.passed, $firstTrxSum.failed, $firstTrxSum.error, $firstTrxSum.aborted, $firstTrxSum.timeout)
+        }
         Write-Host ('   Final failed tests: {0}' -f $lastFailed.Count)
 
         ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
