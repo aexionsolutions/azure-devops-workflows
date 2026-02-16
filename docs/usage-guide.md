@@ -38,7 +38,7 @@ AZURE_SUBSCRIPTION_ID
 Configure environment secrets (per environment):
 
 ```
-POSTGRES_ADMIN_PASSWORD
+POSTGRES_ADMIN_PASSWORD  # Optional — auto-generated if not set
 AZURE_LOCATION
 ```
 
@@ -74,7 +74,7 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      # POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}  # Optional — auto-generated if not set
 ```
 
 > **Note**: Version tags are auto-generated based on Conventional Commits. Use `@v4.1.0` for stable releases or `@v4.1.0-pr.3.abc123` for pre-release testing.
@@ -113,12 +113,13 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      # POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}  # Optional — auto-generated if not set
 ```
 
 ### Key Features
 
 - ✅ OIDC authentication (no long-lived secrets)
+- ✅ Auto-generated PostgreSQL admin password (or bring your own)
 - ✅ Automatic PostgreSQL server management (start/stop/wait)
 - ✅ Key Vault RBAC auto-configuration
 - ✅ Provider registration (PostgreSQL, Application Insights)
@@ -574,14 +575,14 @@ If you pin a workflow to a tag (stable or prerelease), set `with: shared_ref: <s
 
 ### 2. Secrets Management
 
-**Use environment secrets for environment-specific values**:
+**Use environment secrets for environment-specific values** (optional — password auto-generated if not set):
 ```yaml
 jobs:
   deploy:
     environment: ${{ inputs.environment }}  # This maps to GitHub environment
     uses: aexionsolutions/azure-devops-workflows/...
     secrets:
-      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}  # From environment
+      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}  # Optional
 ```
 
 **Use repository secrets for shared values**:
@@ -653,9 +654,9 @@ uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v1.
 
 ### Secret Not Found
 
-**Error**: "Required secret POSTGRES_ADMIN_PASSWORD is not set"
+**Error**: "Secret POSTGRES_ADMIN_PASSWORD is required, but not provided while calling"
 
-**Solution**: Configure secret in GitHub repository settings under the correct environment.
+**Solution**: This should no longer occur — the password is auto-generated if not set. If you see this error, update your shared workflow reference to the latest version.
 
 ### Coverage Threshold Not Met
 
