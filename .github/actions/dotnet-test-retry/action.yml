@@ -2,6 +2,7 @@ name: 'Smart .NET Test Retry'
 description: 'Run dotnet tests with smart retry - only re-runs failed tests instead of entire suite'
 author: 'DevOps Team'
 # v4.3.0: Fixed critical infrastructure failure detection bug
+# v4.3.2: TRX missing on retry → fall back to last known failure list instead of aborting
 
 inputs:
   project:
@@ -331,6 +332,7 @@ runs:
         
         $failed1 = @($failed1)
         $failedFirstCount = $failed1.Count
+        $lastKnownFailed = $failed1
         Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
 
         # Retry attempts: re-run ONLY failures from previous attempt
@@ -343,19 +345,13 @@ runs:
 
           # CRITICAL: Distinguish between "TRX exists with 0 failures" vs "TRX missing/unreadable"
           if ($failedPrev -eq $null) {
-            Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX file missing or unreadable from previous attempt. Cannot retry.')
-            Write-Host ('   This indicates the test runner crashed or failed before completing.')
-            
-            ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
-            ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
-            ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
-            'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-            'failed-tests-last=' >> $env:GITHUB_OUTPUT
-            exit $exitCode
+            Write-Host ('   ⚠️ TRX from attempt {0} missing — falling back to last known failure list ({1} tests).' -f ($attempt - 1), $lastKnownFailed.Count)
+            $failedPrev = $lastKnownFailed
           }
 
           # At this point, $failedPrev is an array (possibly empty)
           $failedPrev = @($failedPrev)
+          if ($failedPrev.Count -gt 0) { $lastKnownFailed = $failedPrev }
           
           if ($failedPrev.Count -eq 0) {
             # TRX exists and shows 0 failures, but dotnet exit code was non-zero
@@ -411,17 +407,9 @@ runs:
         $lastFailed = Get-FailedFQNsFromTrx (Get-TrxPath $attempt)
         
         if ($lastFailed -eq $null) {
-          # Infrastructure failure on final attempt
           Write-Host ''
-          Write-Host ('❌ INFRASTRUCTURE FAILURE after {0} attempts' -f $maxAttempts)
-          Write-Host ('   TRX file missing or unreadable on final attempt.')
-          
-          ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
-          ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
-          ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
-          'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-          'failed-tests-last=' >> $env:GITHUB_OUTPUT
-          exit $exitCode
+          Write-Host ('   ⚠️ TRX from final attempt missing — using last known failure list ({0} tests).' -f $lastKnownFailed.Count)
+          $lastFailed = $lastKnownFailed
         }
         
         $lastFailed = @($lastFailed)
