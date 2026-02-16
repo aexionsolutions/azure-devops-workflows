@@ -136,26 +136,39 @@ runs:
 
         function Get-TrxSummary([string]$trxPath) {
           if (-not (Test-Path $trxPath)) { return $null }
-          $doc = Load-Trx $trxPath
-          $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
-          if ($counters -eq $null) { return $null }
+          try {
+            $doc = Load-Trx $trxPath
+            $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
+            if ($counters -eq $null) { return $null }
 
-          return @{
-            total   = $counters.GetAttribute('total')
-            passed  = $counters.GetAttribute('passed')
-            failed  = $counters.GetAttribute('failed')
-            error   = $counters.GetAttribute('error')
-            aborted = $counters.GetAttribute('aborted')
-            timeout = $counters.GetAttribute('timeout')
+            return @{
+              total   = $counters.GetAttribute('total')
+              passed  = $counters.GetAttribute('passed')
+              failed  = $counters.GetAttribute('failed')
+              error   = $counters.GetAttribute('error')
+              aborted = $counters.GetAttribute('aborted')
+              timeout = $counters.GetAttribute('timeout')
+            }
+          }
+          catch {
+            Write-Host ("⚠️ Error parsing TRX summary: {0}" -f $_.Exception.Message)
+            return $null
           }
         }
 
         function Get-FailedFQNsFromTrx([string]$trxPath) {
           # Return $null (not @()) when TRX is missing/unreadable so caller can distinguish
-          # between "TRX exists with 0 failures" vs "TRX doesn't exist"
+          # between "TRX exists with 0 failures" vs "TRX doesn't exist/corrupt"
           if (-not (Test-Path $trxPath)) { return $null }
 
-          $doc = Load-Trx $trxPath
+          try {
+            $doc = Load-Trx $trxPath
+          }
+          catch {
+            Write-Host ("   ⚠️ TRX file exists but is corrupt/truncated: {0}" -f $_.Exception.Message)
+            return $null
+          }
+
           $xml = $doc.Xml
           $ns  = $doc.Ns
 
