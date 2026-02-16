@@ -112,34 +112,6 @@ jobs:
       run:
         working-directory: caller
     
-    # Docker services for integration tests (PostgreSQL + Azurite)
-    # These run ONLY when run_integration: true
-    # Cost: $0 (included in GitHub Actions free tier)
-    # Lifespan: Duration of test run (~2-3 minutes)
-    # Network: Isolated to this runner (cannot access Azure)
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: test_password_123
-          POSTGRES_DB: ${{ inputs.postgres_db || 'ci_test' }}
-        ports:
-          - 5432:5432
-        # Health checks ensure PostgreSQL is ready before tests
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:latest
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
-    
     steps:
       - name: Resolve shared workflows ref
         id: wfref
@@ -256,18 +228,6 @@ jobs:
           fi
           echo "unit=$UNIT" >> $GITHUB_OUTPUT
           echo "Resolved unit test project: $UNIT"
-          
-          # Resolve integration test project (only if integration tests enabled)
-          INTEG="${{ inputs.integration_test_project }}"
-          if [ -z "$INTEG" ]; then
-            INTEG=$(find tests -maxdepth 2 -name '*IntegrationTest*.csproj' -o -name '*Integration.Test*.csproj' 2>/dev/null | head -n1)
-          fi
-          echo "integration=$INTEG" >> $GITHUB_OUTPUT
-          if [ -n "$INTEG" ]; then
-            echo "Resolved integration test project: $INTEG"
-          else
-            echo "No integration test project resolved (will skip if run_integration is true)"
-          fi
 
       - name: Unit Tests + Coverage (OpenCover)
         run: |
@@ -302,27 +262,6 @@ jobs:
             "-assemblyfilters:$ASSEMBLY_FILTERS"
           cat coverage-report/Summary.txt || true
 
-      - name: Integration Tests + Coverage (OpenCover)
-        if: inputs.run_integration == true && steps.test_projects.outputs.integration != ''
-        env:
-          # Connection string for Docker PostgreSQL service
-          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
-        run: |
-          echo "### Running Integration Tests (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Using Docker PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
-          
-          # Verify PostgreSQL health before running tests (service health checks handle this, but double-check)
-          echo "✅ PostgreSQL service ready (verified by service health checks)" >> "$GITHUB_STEP_SUMMARY"
-          
-          # Run integration tests with Docker PostgreSQL
-          dotnet test ${{ steps.test_projects.outputs.integration }} \
-            -c Release --no-build \
-            --collect:"XPlat Code Coverage" \
-            --logger "trx;LogFileName=integration.trx" \
-            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
-          
-          echo "✅ Integration tests completed" >> "$GITHUB_STEP_SUMMARY"
-      
       - name: Check coverage threshold
         id: coverage_check
         continue-on-error: true
@@ -467,3 +406,108 @@ jobs:
             cat coverage-report/Summary.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # ─── Integration Tests (runs in PARALLEL with ci job) ───────────────────────
+  # Separate job to run integration tests concurrently with unit tests + SonarCloud.
+  # Each job builds independently (~1.5 min build cost) to avoid artifact overhead.
+  # Net saving: ~7 min wall-clock (unit ~6 min + integration ~7 min sequential → max(6, 7) parallel).
+  # NOTE for repositories using this reusable workflow:
+  #   - Branch protection rules that require specific checks must include BOTH `ci`
+  #     and `integration-tests` (if `run_integration` is enabled), otherwise merges
+  #     may be allowed when only `ci` has passed.
+  #   - The `ci` job can complete and report "passed" while `integration-tests` is
+  #     still running or has failed; rely on the overall workflow status or wait for
+  #     both jobs when treating "CI complete" as "all tests passed".
+  integration-tests:
+    if: inputs.run_integration == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      CALLER_WORKDIR: caller
+
+    defaults:
+      run:
+        working-directory: caller
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_password_123
+          POSTGRES_DB: ${{ inputs.postgres_db || 'ci_test' }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:latest
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.solution }}
+
+      - name: Build
+        run: dotnet build ${{ inputs.solution }} -c Release --no-restore
+
+      - name: Resolve integration test project
+        id: test_projects
+        shell: bash
+        run: |
+          INTEG="${{ inputs.integration_test_project }}"
+          if [ -z "$INTEG" ]; then
+            INTEG=$(find tests -maxdepth 2 -name '*IntegrationTest*.csproj' -o -name '*Integration.Test*.csproj' 2>/dev/null | head -n1)
+          fi
+          if [ -z "$INTEG" ]; then
+            echo "::error::No integration test project found. Set 'integration_test_project' input or ensure a *IntegrationTest*.csproj exists under tests/."
+            exit 1
+          fi
+          echo "integration=$INTEG" >> $GITHUB_OUTPUT
+          echo "Resolved integration test project: $INTEG"
+
+      - name: Integration Tests + Coverage (OpenCover)
+        env:
+          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
+        run: |
+          echo "### Running Integration Tests (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Using Docker PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
+
+          dotnet test ${{ steps.test_projects.outputs.integration }} \
+            -c Release --no-build \
+            --collect:"XPlat Code Coverage" \
+            --logger "trx;LogFileName=integration.trx" \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+
+          echo "✅ Integration tests completed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-test-artifacts
+          path: |
+            **/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
