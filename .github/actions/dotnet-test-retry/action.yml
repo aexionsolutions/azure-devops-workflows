@@ -71,6 +71,9 @@ runs:
       run: |
         $ErrorActionPreference = 'Continue'
 
+        # Ensure PowerShell 7.3+ correctly quotes native command arguments
+        $PSNativeCommandArgumentPassing = 'Standard'
+
         # Avoid literal pipe in the script text (some runner/masking combos cause parsing issues)
         $PIPE = [char]124
 
@@ -195,9 +198,22 @@ runs:
         }
 
         function Build-OrFilter([string[]]$fqns) {
+          # Strip NUnit/xUnit parameterized test arguments from FQNs to avoid shell quoting issues.
+          # e.g. Class.Method("arg1","arg2") → Class.Method
+          # Embedded quotes, parens, ampersands, and commas in param values break PowerShell's
+          # native command argument passing, causing MSBuild to receive broken switches.
+          # Trade-off: uses ~ (contains) matching, so all parameterizations of a method are retried.
           $parts = New-Object System.Collections.Generic.List[string]
+          $seen  = @{}
           foreach ($t in $fqns) {
-            if (-not [string]::IsNullOrWhiteSpace($t)) { $parts.Add(('FullyQualifiedName={0}' -f $t)) }
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            $clean = $t
+            $parenIdx = $clean.IndexOf('(')
+            if ($parenIdx -gt 0) { $clean = $clean.Substring(0, $parenIdx) }
+            if (-not $seen.ContainsKey($clean)) {
+              $seen[$clean] = $true
+              $parts.Add(('FullyQualifiedName~{0}' -f $clean))
+            }
           }
           [string]::Join($PIPE, $parts)
         }
@@ -415,8 +431,15 @@ runs:
         $lastFailed = @($lastFailed)
         $lastFailedPipe = [string]::Join($PIPE, $lastFailed)
 
+        # Show the TRX summary from the first attempt (full test suite run)
+        $firstTrxSum = Get-TrxSummary (Get-TrxPath 1)
+
         Write-Host ''
         Write-Host ('❌ Tests failed after {0} attempts' -f $maxAttempts)
+        if ($firstTrxSum) {
+          Write-Host ('   TRX summary (attempt 1): total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}' -f `
+            $firstTrxSum.total, $firstTrxSum.passed, $firstTrxSum.failed, $firstTrxSum.error, $firstTrxSum.aborted, $firstTrxSum.timeout)
+        }
         Write-Host ('   Final failed tests: {0}' -f $lastFailed.Count)
 
         ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
