@@ -109,6 +109,11 @@ on:
         required: false
         type: boolean
         default: true
+      playwright_smoke_config:
+        description: 'Path to Playwright smoke config file relative to web_directory (e.g., playwright.smoke.config.ts). Required when run_smoke_only is true and run_playwright_tests is true.'
+        required: false
+        type: string
+        default: ''
       
       # Generic E2E environment variables (pass any test-specific env vars as JSON)
       e2e_env_vars:
@@ -775,20 +780,11 @@ jobs:
           
           if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
             echo "ℹ️  Running smoke tests only..."
-            # Search common locations for smoke.spec.ts
-            smoke_file=""
-            for candidate in "smoke.spec.ts" "tests/smoke.spec.ts" "e2e/smoke.spec.ts" "tests/e2e/smoke/smoke.spec.ts" "tests/e2e/smoke.spec.ts"; do
-              if [ -f "$candidate" ]; then
-                smoke_file="$candidate"
-                break
-              fi
-            done
-            
-            if [ -n "$smoke_file" ]; then
-              echo "   Found: $smoke_file"
-              npx playwright test "$smoke_file" --reporter=list
+            if [ -n "${{ inputs.playwright_smoke_config }}" ]; then
+              echo "   Config: ${{ inputs.playwright_smoke_config }}"
+              npx playwright test --config=${{ inputs.playwright_smoke_config }} --reporter=list
             else
-              echo "⚠️  No smoke.spec.ts found, running tests with @smoke tag..."
+              echo "⚠️  No playwright_smoke_config provided, running tests with @smoke tag..."
               npx playwright test --grep @smoke --reporter=list
             fi
           else
