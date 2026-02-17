@@ -443,13 +443,10 @@ jobs:
         run: |
           set -e
           
-          # Get Key Vault name from deployment outputs
-          KV_NAME=$(az deployment group show \
-            --resource-group "${{ inputs.resource_group }}" \
-            --name "${{ inputs.deployment_name }}" \
-            --query "properties.outputs.keyVaultName.value" -o tsv || echo "")
+          # Use KV name from the parsed deployment outputs (step 'out')
+          KV_NAME="${{ steps.out.outputs.KV_NAME }}"
           
-          if [ -z "$KV_NAME" ]; then
+          if [ -z "$KV_NAME" ] || [ "$KV_NAME" = "null" ]; then
             echo "[WARN] Key Vault name not found in deployment outputs, skipping RBAC setup"
             exit 0
           fi
