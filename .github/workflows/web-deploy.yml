@@ -28,10 +28,7 @@ on:
         description: 'Concurrency group name (e.g., tems-web-build, ravenxpress-web-build)'
         required: true
         type: string
-        
-  push:
-    tags:
-      - 'v*'
+
   workflow_dispatch:
     inputs:
       git_ref:
@@ -51,7 +48,7 @@ on:
         description: 'Path to web project directory (e.g., web/tems-portal)'
         required: true
         type: string
-        
+
   # All automated triggers are orchestrated from main-verify.yml via workflow_dispatch
 
 concurrency:
@@ -68,8 +65,8 @@ jobs:
   build-and-package:
     name: Build & Package
     runs-on: windows-latest
-    # Build for tag pushes (to create durable release assets) OR any manual run
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    # Build for workflow_call or workflow_dispatch triggers
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     env:
       PACKAGE: web.zip
     outputs:
