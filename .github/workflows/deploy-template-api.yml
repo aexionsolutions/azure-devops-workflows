@@ -624,13 +624,32 @@ jobs:
           rem=$(( ${#part2} % 4 ))
           if [ $rem -eq 2 ]; then part2+="=="; elif [ $rem -eq 3 ]; then part2+="="; fi
           json=$(echo "$part2" | tr -- '-_' '+/' | base64 -d 2>/dev/null || echo "{}")
-          subset=$(echo "$json" | jq '{iss, aud, scp, roles, tfp, tid, azp, appid, sub, iat, nbf, exp} | with_entries(select(.value != null))')
+          # Extract individual claims to avoid GitHub masking (token is masked, so
+          # any substring that matches part of the token gets redacted in logs).
+          AUD=$(echo "$json" | jq -r '.aud // "N/A"')
+          ISS=$(echo "$json" | jq -r '.iss // "N/A"')
+          SCP=$(echo "$json" | jq -r '.scp // "N/A"')
+          TFP=$(echo "$json" | jq -r '.tfp // "N/A"')
+          AZP=$(echo "$json" | jq -r '.azp // "N/A"')
+          TID=$(echo "$json" | jq -r '.tid // "N/A"')
+          ROLES=$(echo "$json" | jq -r '(.roles // []) | join(", ")')
+          EXP=$(echo "$json" | jq -r '.exp // "N/A"')
+          # Write to step summary (not subject to log masking)
           {
             echo "### Protected smoke token claims"
-            echo '```json'
-            echo "$subset"
-            echo '```'
+            echo "| Claim | Value |"
+            echo "|-------|-------|"
+            echo "| aud | \`${AUD}\` |"
+            echo "| iss | \`${ISS}\` |"
+            echo "| scp | \`${SCP}\` |"
+            echo "| tfp | \`${TFP}\` |"
+            echo "| azp | \`${AZP}\` |"
+            echo "| tid | \`${TID}\` |"
+            echo "| roles | \`${ROLES}\` |"
+            echo "| exp | \`${EXP}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Also echo non-secret diagnostics to logs
+          echo "Token aud=$AUD scp=$SCP tfp=$TFP azp=$AZP"
 
       - name: API health checks
         shell: bash
@@ -671,17 +690,26 @@ jobs:
           fi
           URL="${BASE%/}${PATH_ONLY}"
           echo "Protected smoke: GET $URL"
-          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$URL" || true)
+          BODY=$(mktemp)
+          code=$(curl -s -o "$BODY" -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$URL" || true)
           if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
-            echo "First attempt HTTP $code; retrying in 3s..."
+            echo "First attempt HTTP $code; response body:"
+            cat "$BODY" 2>/dev/null || true
+            echo ""
+            echo "Retrying in 3s..."
             sleep 3
-            code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$URL" || true)
+            code=$(curl -s -o "$BODY" -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$URL" || true)
           fi
           echo "HTTP $code from protected endpoint"
           if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "Response body:"
+            cat "$BODY" 2>/dev/null || true
+            echo ""
             echo "Protected API smoke failed (HTTP $code)." >&2
+            rm -f "$BODY"
             exit 1
           fi
+          rm -f "$BODY"
 
   route-traffic:
     name: Deploy to Production
