@@ -458,12 +458,24 @@ jobs:
           
           # Assign Key Vault Secrets Officer to workflow identity
           echo "Assigning Key Vault Secrets Officer to workflow identity..."
-          az role assignment create \
+          ROLE_RESULT=$(az role assignment create \
             --assignee-object-id "$WORKFLOW_PRINCIPAL_ID" \
             --assignee-principal-type ServicePrincipal \
             --role "Key Vault Secrets Officer" \
             --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
-            2>&1 || echo "[WARN] Role assignment may already exist or insufficient permissions"
+            2>&1) && echo "[OK] Key Vault Secrets Officer assigned" || {
+            if echo "$ROLE_RESULT" | grep -q "RoleAssignmentExists"; then
+              echo "[OK] Key Vault Secrets Officer already assigned (idempotent)"
+            else
+              echo "::error::Failed to assign Key Vault Secrets Officer to workflow identity"
+              echo "$ROLE_RESULT"
+              echo ""
+              echo "The workflow SP ($WORKFLOW_PRINCIPAL_ID) likely lacks 'Owner' or 'User Access Administrator'"
+              echo "on the resource group. Either grant that role or manually create the assignment:"
+              echo "  az role assignment create --assignee-object-id $WORKFLOW_PRINCIPAL_ID --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets Officer' --scope /subscriptions/\$SUB/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME"
+              exit 1
+            fi
+          }
           
           # Get API managed identity principal ID (if exists)
           API_MI_NAME="${{ inputs.name_prefix }}-api-mi"
@@ -474,12 +486,19 @@ jobs:
           
           if [ -n "$API_MI_ID" ]; then
             echo "Assigning Key Vault Secrets User to API managed identity..."
-            az role assignment create \
+            MI_RESULT=$(az role assignment create \
               --assignee-object-id "$API_MI_ID" \
               --assignee-principal-type ServicePrincipal \
               --role "Key Vault Secrets User" \
               --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
-              2>&1 || echo "[WARN] Role assignment may already exist or insufficient permissions"
+              2>&1) && echo "[OK] Key Vault Secrets User assigned to API MI" || {
+              if echo "$MI_RESULT" | grep -q "RoleAssignmentExists"; then
+                echo "[OK] Key Vault Secrets User already assigned to API MI (idempotent)"
+              else
+                echo "::warning::Failed to assign Key Vault Secrets User to API managed identity"
+                echo "$MI_RESULT"
+              fi
+            }
           fi
           
           echo "[OK] Key Vault RBAC setup completed"
