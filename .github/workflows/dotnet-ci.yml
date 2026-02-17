@@ -100,7 +100,7 @@ on:
         required: false
 
 jobs:
-  ci:
+  build-and-unit-tests:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -111,34 +111,6 @@ jobs:
     defaults:
       run:
         working-directory: caller
-    
-    # Docker services for integration tests (PostgreSQL + Azurite)
-    # These run ONLY when run_integration: true
-    # Cost: $0 (included in GitHub Actions free tier)
-    # Lifespan: Duration of test run (~2-3 minutes)
-    # Network: Isolated to this runner (cannot access Azure)
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: test_password_123
-          POSTGRES_DB: ${{ inputs.postgres_db || 'ci_test' }}
-        ports:
-          - 5432:5432
-        # Health checks ensure PostgreSQL is ready before tests
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:latest
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
     
     steps:
       - name: Resolve shared workflows ref
@@ -256,18 +228,6 @@ jobs:
           fi
           echo "unit=$UNIT" >> $GITHUB_OUTPUT
           echo "Resolved unit test project: $UNIT"
-          
-          # Resolve integration test project (only if integration tests enabled)
-          INTEG="${{ inputs.integration_test_project }}"
-          if [ -z "$INTEG" ]; then
-            INTEG=$(find tests -maxdepth 2 -name '*IntegrationTest*.csproj' -o -name '*Integration.Test*.csproj' 2>/dev/null | head -n1)
-          fi
-          echo "integration=$INTEG" >> $GITHUB_OUTPUT
-          if [ -n "$INTEG" ]; then
-            echo "Resolved integration test project: $INTEG"
-          else
-            echo "No integration test project resolved (will skip if run_integration is true)"
-          fi
 
       - name: Unit Tests + Coverage (OpenCover)
         run: |
@@ -302,43 +262,30 @@ jobs:
             "-assemblyfilters:$ASSEMBLY_FILTERS"
           cat coverage-report/Summary.txt || true
 
-      - name: Integration Tests + Coverage (OpenCover)
-        if: inputs.run_integration == true && steps.test_projects.outputs.integration != ''
-        env:
-          # Connection string for Docker PostgreSQL service
-          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
-        run: |
-          echo "### Running Integration Tests (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Using Docker PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
-          
-          # Verify PostgreSQL health before running tests (service health checks handle this, but double-check)
-          echo "✅ PostgreSQL service ready (verified by service health checks)" >> "$GITHUB_STEP_SUMMARY"
-          
-          # Run integration tests with Docker PostgreSQL
-          dotnet test ${{ steps.test_projects.outputs.integration }} \
-            -c Release --no-build \
-            --collect:"XPlat Code Coverage" \
-            --logger "trx;LogFileName=integration.trx" \
-            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
-          
-          echo "✅ Integration tests completed" >> "$GITHUB_STEP_SUMMARY"
-      
+      # Upload unit coverage for the coverage-gate job to merge with integration coverage
+      - name: Upload unit coverage
+        if: always() && inputs.run_integration == true
+        uses: actions/upload-artifact@v5
+        with:
+          name: unit-coverage
+          path: caller/**/coverage.opencover.xml
+          if-no-files-found: warn
+          retention-days: 1
+
       - name: Check coverage threshold
+        # Skip when integration tests run in parallel (coverage-gate job merges both)
+        if: inputs.run_integration != true
         id: coverage_check
         continue-on-error: true
         shell: bash
         run: |
           set -e
-          # Re-generate summary to ensure we include all coverage files (unit + integration when enabled)
           dotnet tool install -g dotnet-reportgenerator-globaltool || true
           
-          # Determine assembly filters (always exclude test assemblies + custom filters)
-          # Auto-detect test assemblies by looking at test project names
           TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
           if [ -n "$TEST_PROJECTS" ]; then
             ASSEMBLY_FILTERS="-$TEST_PROJECTS"
           fi
-          # Append custom filters if provided
           if [ -n "${{ inputs.coverage_assembly_filters }}" ]; then
             if [ -n "$ASSEMBLY_FILTERS" ]; then
               ASSEMBLY_FILTERS="$ASSEMBLY_FILTERS;${{ inputs.coverage_assembly_filters }}"
@@ -365,7 +312,6 @@ jobs:
           cat coverage-report/Summary.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-          # Extract numeric percentage from the summary (e.g., "Line coverage: 82.3%")
           LINE_COV=$(grep -Eo 'Line coverage: [0-9]+(\.[0-9]+)?%' coverage-report/Summary.txt | grep -Eo '[0-9]+(\.[0-9]+)?' | head -n1)
           THRESHOLD=${{ inputs.coverage_threshold }}
 
@@ -449,7 +395,7 @@ jobs:
           echo "::notice::Code changed: $CODE_CHANGED"
 
       - name: Enforce coverage threshold (final)
-        if: inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && (github.event_name != 'pull_request' || steps.code_changes.outputs.CODE_CHANGED == 'true')
+        if: inputs.run_integration != true && inputs.enforce_coverage == true && steps.coverage_check.outputs.COVERAGE_PASSED == 'false' && (github.event_name != 'pull_request' || steps.code_changes.outputs.CODE_CHANGED == 'true')
         shell: bash
         run: |
           echo "::error::Coverage threshold not met - see coverage check step for details"
@@ -466,4 +412,216 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             cat coverage-report/Summary.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ─── Integration Tests (runs in PARALLEL with build-and-unit-tests) ─────────
+  # Separate job so unit tests + SonarCloud run concurrently with integration tests.
+  # Each job builds independently (~1.5 min build cost) to avoid artifact overhead.
+  # Net saving: ~7 min wall-clock (unit ~6 min + integration ~7 min sequential → max(6,7) parallel).
+  # NOTE for repositories using this reusable workflow:
+  #   - Branch protection rules that require specific checks must include
+  #     `build-and-unit-tests`, `integration-tests`, and `coverage-gate`.
+  #   - `build-and-unit-tests` can pass while `integration-tests` is still running;
+  #     rely on the overall workflow status or wait for `coverage-gate`.
+  integration-tests:
+    if: inputs.run_integration == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      CALLER_WORKDIR: caller
+
+    defaults:
+      run:
+        working-directory: caller
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_password_123
+          POSTGRES_DB: ${{ inputs.postgres_db || 'ci_test' }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:latest
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.solution }}
+
+      - name: Build
+        run: dotnet build ${{ inputs.solution }} -c Release --no-restore
+
+      - name: Resolve integration test project
+        id: test_projects
+        shell: bash
+        run: |
+          INTEG="${{ inputs.integration_test_project }}"
+          if [ -z "$INTEG" ]; then
+            INTEG=$(find tests -maxdepth 2 -name '*IntegrationTest*.csproj' -o -name '*Integration.Test*.csproj' 2>/dev/null | head -n1)
+          fi
+          if [ -z "$INTEG" ]; then
+            echo "::error::No integration test project found. Set 'integration_test_project' input or ensure a *IntegrationTest*.csproj exists under tests/."
+            exit 1
+          fi
+          echo "integration=$INTEG" >> $GITHUB_OUTPUT
+          echo "Resolved integration test project: $INTEG"
+
+      - name: Integration Tests + Coverage (OpenCover)
+        env:
+          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
+        run: |
+          echo "### Running Integration Tests (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Using Docker PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
+
+          dotnet test ${{ steps.test_projects.outputs.integration }} \
+            -c Release --no-build \
+            --collect:"XPlat Code Coverage" \
+            --logger "trx;LogFileName=integration.trx" \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+
+          echo "✅ Integration tests completed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload integration coverage
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-coverage
+          path: caller/**/coverage.opencover.xml
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-test-artifacts
+          path: |
+            **/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ─── Coverage Gate (runs after BOTH test jobs) ──────────────────────────────
+  # Merges unit + integration coverage and enforces the threshold.
+  coverage-gate:
+    if: always() && inputs.run_integration == true && inputs.enforce_coverage == true
+    needs: [build-and-unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Fail fast if a test job failed
+        if: needs.build-and-unit-tests.result == 'failure' || needs.integration-tests.result == 'failure'
+        run: |
+          echo "::error::One or more test jobs failed — skipping coverage merge."
+          exit 1
+
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          sparse-checkout: tests
+          sparse-checkout-cone-mode: true
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: unit-coverage
+          path: coverage/unit
+
+      - name: Download integration coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: integration-coverage
+          path: coverage/integration
+
+      - name: Merge coverage and check threshold
+        shell: bash
+        run: |
+          set -e
+          dotnet tool install -g dotnet-reportgenerator-globaltool || true
+
+          # Auto-detect test assemblies to exclude from coverage
+          TEST_PROJECTS=$(find tests -name '*.csproj' 2>/dev/null | xargs -I {} basename {} .csproj | tr '\n' ';' | sed 's/;$//' | sed 's/;/;-/g')
+          ASSEMBLY_FILTERS=""
+          if [ -n "$TEST_PROJECTS" ]; then
+            ASSEMBLY_FILTERS="-$TEST_PROJECTS"
+          fi
+          if [ -n "${{ inputs.coverage_assembly_filters }}" ]; then
+            if [ -n "$ASSEMBLY_FILTERS" ]; then
+              ASSEMBLY_FILTERS="$ASSEMBLY_FILTERS;${{ inputs.coverage_assembly_filters }}"
+            else
+              ASSEMBLY_FILTERS="${{ inputs.coverage_assembly_filters }}"
+            fi
+          fi
+
+          echo "Found coverage files:"
+          find coverage -name 'coverage.opencover.xml' | head -n 10
+
+          reportgenerator \
+            "-reports:coverage/**/coverage.opencover.xml" \
+            "-targetdir:coverage-report" \
+            "-reporttypes:TextSummary" \
+            "-assemblyfilters:$ASSEMBLY_FILTERS" \
+            "-classfilters:-*RegexGenerator*" \
+            "-filefilters:-**/obj/**"
+
+          if [ ! -f coverage-report/Summary.txt ]; then
+            echo "::error::Coverage summary not found after merge."
+            exit 1
+          fi
+
+          echo "### Merged Coverage Gate (unit + integration)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat coverage-report/Summary.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          LINE_COV=$(grep -Eo 'Line coverage: [0-9]+(\.[0-9]+)?%' coverage-report/Summary.txt | grep -Eo '[0-9]+(\.[0-9]+)?' | head -n1)
+          THRESHOLD=${{ inputs.coverage_threshold }}
+
+          if [ -z "$LINE_COV" ]; then
+            echo "::error::Could not parse line coverage from Summary.txt"
+            cat coverage-report/Summary.txt
+            exit 1
+          fi
+
+          echo "Merged coverage: ${LINE_COV}% | Threshold: ${THRESHOLD}%"
+
+          if awk -v cov="$LINE_COV" -v thr="$THRESHOLD" 'BEGIN { exit ((cov+0) < (thr+0)) }'; then
+            echo "✅ Merged coverage ${LINE_COV}% >= threshold ${THRESHOLD}%" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Merged coverage ${LINE_COV}% is below threshold ${THRESHOLD}%" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Coverage ${LINE_COV}% is below threshold ${THRESHOLD}%"
+            exit 1
           fi
