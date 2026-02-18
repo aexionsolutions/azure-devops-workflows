@@ -310,6 +310,22 @@ jobs:
             echo "Using provided POSTGRES_ADMIN_PASSWORD secret"
             echo "::add-mask::$PG_SECRET"
             echo "value=$PG_SECRET" >> $GITHUB_OUTPUT
+          elif [ "$PG_EXISTS" = "true" ]; then
+            # Server already exists — read current password from Key Vault.
+            # Generating a new random password would desync KV vs the actual server.
+            echo "PostgreSQL server already exists — reading current password from Key Vault"
+            KV_NAME="${{ inputs.name_prefix }}-kv"
+            KV_PASS=$(az keyvault secret show --vault-name "$KV_NAME" --name PostgresPassword --query value -o tsv 2>/dev/null || true)
+            if [ -n "$KV_PASS" ]; then
+              echo "::add-mask::$KV_PASS"
+              echo "value=$KV_PASS" >> $GITHUB_OUTPUT
+            else
+              echo "::warning::PostgresPassword secret not found in $KV_NAME — auto-generating (may desync if server password differs)"
+              # Fall through to auto-generate as a last resort
+              PG_PASS=$(openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-32)
+              echo "::add-mask::$PG_PASS"
+              echo "value=$PG_PASS" >> $GITHUB_OUTPUT
+            fi
           else
             echo "Auto-generating PostgreSQL admin password (32-char, with complexity checks)"
             MAX_GEN_ATTEMPTS=10
@@ -342,6 +358,7 @@ jobs:
           fi
         env:
           PG_SECRET: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          PG_EXISTS: ${{ steps.pg_exists.outputs.exists }}
 
       - name: Determine Bicep parameters for PostgreSQL
         id: bicep_params
