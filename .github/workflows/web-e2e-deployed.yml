@@ -412,6 +412,13 @@ jobs:
               echo "$CONN_STR"
               echo "${DELIM}"
             } >> "$GITHUB_ENV"
+            # Also set E2E-specific env var for Reqnroll DatabaseHelper
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "E2E_DATABASE_CONNECTION_STRING<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
           else
             echo "ℹ️  No database connection string provided; tests will use default/local configuration"
           fi
