@@ -310,6 +310,22 @@ jobs:
             echo "Using provided POSTGRES_ADMIN_PASSWORD secret"
             echo "::add-mask::$PG_SECRET"
             echo "value=$PG_SECRET" >> $GITHUB_OUTPUT
+          elif [ "$PG_EXISTS" = "true" ]; then
+            # Server already exists — read current password from Key Vault.
+            # Generating a new random password would desync KV vs the actual server.
+            echo "PostgreSQL server already exists — reading current password from Key Vault"
+            KV_NAME="${{ inputs.name_prefix }}-kv"
+            KV_PASS=$(az keyvault secret show --vault-name "$KV_NAME" --name PostgresPassword --query value -o tsv 2>/dev/null || true)
+            if [ -n "$KV_PASS" ]; then
+              echo "::add-mask::$KV_PASS"
+              echo "value=$KV_PASS" >> $GITHUB_OUTPUT
+            else
+              echo "::warning::PostgresPassword secret not found in $KV_NAME — auto-generating (may desync if server password differs)"
+              # Fall through to auto-generate as a last resort
+              PG_PASS=$(openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-32)
+              echo "::add-mask::$PG_PASS"
+              echo "value=$PG_PASS" >> $GITHUB_OUTPUT
+            fi
           else
             echo "Auto-generating PostgreSQL admin password (32-char, with complexity checks)"
             MAX_GEN_ATTEMPTS=10
@@ -342,6 +358,7 @@ jobs:
           fi
         env:
           PG_SECRET: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          PG_EXISTS: ${{ steps.pg_exists.outputs.exists }}
 
       - name: Determine Bicep parameters for PostgreSQL
         id: bicep_params
@@ -443,13 +460,10 @@ jobs:
         run: |
           set -e
           
-          # Get Key Vault name from deployment outputs
-          KV_NAME=$(az deployment group show \
-            --resource-group "${{ inputs.resource_group }}" \
-            --name "${{ inputs.deployment_name }}" \
-            --query "properties.outputs.keyVaultName.value" -o tsv || echo "")
+          # Use KV name from the parsed deployment outputs (step 'out')
+          KV_NAME="${{ steps.out.outputs.KV_NAME }}"
           
-          if [ -z "$KV_NAME" ]; then
+          if [ -z "$KV_NAME" ] || [ "$KV_NAME" = "null" ]; then
             echo "[WARN] Key Vault name not found in deployment outputs, skipping RBAC setup"
             exit 0
           fi
@@ -461,12 +475,24 @@ jobs:
           
           # Assign Key Vault Secrets Officer to workflow identity
           echo "Assigning Key Vault Secrets Officer to workflow identity..."
-          az role assignment create \
+          ROLE_RESULT=$(az role assignment create \
             --assignee-object-id "$WORKFLOW_PRINCIPAL_ID" \
             --assignee-principal-type ServicePrincipal \
             --role "Key Vault Secrets Officer" \
             --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
-            2>&1 || echo "[WARN] Role assignment may already exist or insufficient permissions"
+            2>&1) && echo "[OK] Key Vault Secrets Officer assigned" || {
+            if echo "$ROLE_RESULT" | grep -q "RoleAssignmentExists"; then
+              echo "[OK] Key Vault Secrets Officer already assigned (idempotent)"
+            else
+              echo "::error::Failed to assign Key Vault Secrets Officer to workflow identity"
+              echo "$ROLE_RESULT"
+              echo ""
+              echo "The workflow SP ($WORKFLOW_PRINCIPAL_ID) likely lacks 'Owner' or 'User Access Administrator'"
+              echo "on the resource group. Either grant that role or manually create the assignment:"
+              echo "  az role assignment create --assignee-object-id $WORKFLOW_PRINCIPAL_ID --assignee-principal-type ServicePrincipal --role 'Key Vault Secrets Officer' --scope /subscriptions/\$SUB/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME"
+              exit 1
+            fi
+          }
           
           # Get API managed identity principal ID (if exists)
           API_MI_NAME="${{ inputs.name_prefix }}-api-mi"
@@ -477,12 +503,19 @@ jobs:
           
           if [ -n "$API_MI_ID" ]; then
             echo "Assigning Key Vault Secrets User to API managed identity..."
-            az role assignment create \
+            MI_RESULT=$(az role assignment create \
               --assignee-object-id "$API_MI_ID" \
               --assignee-principal-type ServicePrincipal \
               --role "Key Vault Secrets User" \
               --scope "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ inputs.resource_group }}/providers/Microsoft.KeyVault/vaults/$KV_NAME" \
-              2>&1 || echo "[WARN] Role assignment may already exist or insufficient permissions"
+              2>&1) && echo "[OK] Key Vault Secrets User assigned to API MI" || {
+              if echo "$MI_RESULT" | grep -q "RoleAssignmentExists"; then
+                echo "[OK] Key Vault Secrets User already assigned to API MI (idempotent)"
+              else
+                echo "::warning::Failed to assign Key Vault Secrets User to API managed identity"
+                echo "$MI_RESULT"
+              fi
+            }
           fi
           
           echo "[OK] Key Vault RBAC setup completed"
