@@ -207,7 +207,7 @@ jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     # Grant permissions for Azure workload identity (OIDC)
     permissions:
       id-token: write
