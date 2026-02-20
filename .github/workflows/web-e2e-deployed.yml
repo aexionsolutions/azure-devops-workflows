@@ -214,6 +214,13 @@ on:
       B2C_SMOKE_CLIENT_SECRET:
         description: 'Legacy: Azure B2C client secret (prefer secrets.b2c_client_secret)'
         required: false
+      # B2C test user credentials for Playwright deployed auth smoke tests
+      B2C_TEST_USER_EMAIL:
+        description: 'B2C test user email for Playwright deployed auth tests'
+        required: false
+      B2C_TEST_USER_PASSWORD:
+        description: 'B2C test user password for Playwright deployed auth tests'
+        required: false
 
 jobs:
   e2e-deployed:
@@ -610,6 +617,8 @@ jobs:
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
           B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
           B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
+          B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
           # Additional E2E env vars and secrets loaded from JSON in previous steps
         run: |
           echo "🎭 Running Playwright tests against deployed environment"
