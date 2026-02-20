@@ -60,10 +60,16 @@ on:
         default: ''
       
       e2e_retry_attempts:
-        description: 'Number of retry attempts for flaky tests (default: 3 for deployed envs)'
+        description: 'Number of retry attempts for Reqnroll tests (default: 3 for deployed envs)'
         required: false
         type: number
         default: 3
+      
+      playwright_retry_attempts:
+        description: 'Number of retry attempts for Playwright tests (default: 2)'
+        required: false
+        type: number
+        default: 2
       
       e2e_enable_video:
         description: 'Enable video recording for tests (increases artifact size)'
@@ -611,7 +617,7 @@ jobs:
           echo "   API URL: ${{ inputs.api_url }}"
           echo "   Config: ${{ inputs.playwright_config || 'default' }}"
           echo "   Project: ${{ inputs.playwright_project || 'all projects' }}"
-          echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
+          echo "   Retry attempts: ${{ inputs.playwright_retry_attempts }}"
           
           config_arg=""
           if [ -n "${{ inputs.playwright_config }}" ]; then
@@ -628,7 +634,7 @@ jobs:
             video_arg="--video=on"
           fi
           
-          npx playwright test $config_arg $project_arg $video_arg --retries=${{ inputs.e2e_retry_attempts }}
+          npx playwright test $config_arg $project_arg $video_arg --retries=${{ inputs.playwright_retry_attempts }}
       
       # Upload Playwright artifacts
       - name: Upload Playwright report
@@ -706,7 +712,7 @@ jobs:
             echo "**Playwright Tests:**" >> $GITHUB_STEP_SUMMARY
             echo "- Config: \`${{ inputs.playwright_config || 'default' }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- Project: \`${{ inputs.playwright_project || 'all projects' }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- Retry attempts: \`${{ inputs.e2e_retry_attempts }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Retry attempts: \`${{ inputs.playwright_retry_attempts }}\`" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
