@@ -47,19 +47,28 @@ runs:
           echo "Postgres server $PG_NAME not found in RG $RG; skipping.";
           exit 0
         fi
-        # Attempt to start (best-effort)
+        # Attempt to start (best-effort; may fail if server is mid-transition)
         echo "Starting Postgres server $PG_NAME..."
         az rest --method post \
           --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME/start?api-version=$API_VER" \
-          --headers "Content-Type=application/json" || true
+          --headers "Content-Type=application/json" || echo "⚠️ Start request failed (server may be busy); will retry during polling."
         # Poll until Ready
         ready=false
+        start_issued=true
         for i in $(seq 1 "$ATTEMPTS"); do
           STATE=$(az rest --method get \
             --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME?api-version=$API_VER" \
             --query properties.state -o tsv || echo "")
           echo "[$i/$ATTEMPTS] PG state: ${STATE:-<unknown>}"
           if [ "$STATE" = "Ready" ]; then ready=true; break; fi
+          # If server finished stopping/is stopped, re-issue start
+          if [ "$STATE" = "Stopped" ] && [ "$start_issued" != "retry" ]; then
+            echo "Server is Stopped — re-issuing start command..."
+            az rest --method post \
+              --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME/start?api-version=$API_VER" \
+              --headers "Content-Type=application/json" || echo "⚠️ Retry start also failed; will keep polling."
+            start_issued="retry"
+          fi
           sleep "$SLEEP_SECS"
         done
         if [ "$ready" != true ]; then
