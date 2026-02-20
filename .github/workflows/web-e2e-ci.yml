@@ -736,6 +736,8 @@ jobs:
         uses: ./shared/.github/actions/dotnet-test-retry
         env:
           RUN_E2E: "true"
+          # CI runs API/DB locally — ensure all E2E components use local auth (JWT) not B2C
+          RAVENXPRESS_E2E_ENV: "local"
           E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
           E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"

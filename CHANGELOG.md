@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Smart Test Retry: NotExecuted/Inconclusive TRX outcomes now tracked (v4.4.0)
+
+**Context:** TRX summary numbers didn't add up — `total` exceeded `passed + failed + error`. Tests that failed in `[BeforeScenario]` hooks (e.g., transient 500 from tenant creation API) were recorded as `NotExecuted` in TRX but the script didn't track that outcome, leaving tests unaccounted for in summaries and — critically — not retried.
+
+- **Fixed:** `Get-TrxCounters` and `Get-TrxSummary` now read `notExecuted` and `inconclusive` attributes from TRX `<Counters>` element
+- **Fixed:** `Merge-TrxResults` counter recalculation now counts all 7 outcome types (`Passed`, `Failed`, `Error`, `NotExecuted`, `Inconclusive`, `Aborted`, `Timeout`) instead of only 3; `executed` attribute is now correctly set to `total - notExecuted - inconclusive` instead of `total`
+- **Fixed:** `Get-FailedFQNsFromTrx` now includes `NotExecuted` outcome in XPath selector, so tests where `[BeforeScenario]` hooks threw transient errors are retried
+- **Improved:** Summary log lines now show `notExecuted=N` and `inconclusive=N` when non-zero, making gaps immediately visible
+
 ### 🚨 Breaking Changes
 
 #### Smart Test Retry: Rewritten with Robust PowerShell Implementation
