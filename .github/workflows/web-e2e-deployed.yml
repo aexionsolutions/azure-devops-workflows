@@ -590,6 +590,7 @@ jobs:
         env:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
+          START_WEB_SERVER: 'false'
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
           # B2C Configuration (with backwards compatibility for legacy secret names)
