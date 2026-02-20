@@ -399,7 +399,7 @@ jobs:
           B2C_TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           B2C_TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
         with:
-          working-directory: caller/${{ inputs.web_directory || 'web' }}
+          working-directory: ${{ inputs.web_directory || 'web' }}
           base-url: ${{ steps.base.outputs.url }}
           artifact-name: web-playwright-${{ inputs.environment }}
           run-auth-smoke: 'true'
