@@ -160,11 +160,6 @@ on:
         required: false
         type: string
         default: ''
-      b2c_token_endpoint:
-        description: 'Explicit B2C/CIAM ROPC token endpoint URL. When set, overrides the endpoint derived from b2c_authority. Required when the authority is a CIAM (.ciamlogin.com) URL but ROPC uses a B2C (.b2clogin.com) policy endpoint.'
-        required: false
-        type: string
-        default: ''
     
     secrets:
       # Azure Authentication (required if using Key Vault with OIDC)
@@ -542,11 +537,6 @@ jobs:
             echo "  ⚠️ B2C_CLIENT_SECRET not configured"
           fi
           
-          if [ -n "${{ inputs.b2c_token_endpoint }}" ]; then
-            echo "  ✅ B2C_TOKEN_ENDPOINT from inputs.b2c_token_endpoint"
-          else
-            echo "  ℹ️ B2C_TOKEN_ENDPOINT not set (will use appsettings.json fallback or derive from authority)"
-          fi
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
 
@@ -583,7 +573,6 @@ jobs:
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
           B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
           B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          B2C_TOKEN_ENDPOINT: ${{ inputs.b2c_token_endpoint }}
           # ConnectionStrings__Postgres and ConnectionStrings__Default set in previous step (only when non-empty)
           # Additional E2E env vars and secrets loaded from JSON in previous steps
         with:
@@ -608,7 +597,6 @@ jobs:
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
           B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
           B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          B2C_TOKEN_ENDPOINT: ${{ inputs.b2c_token_endpoint }}
           # Additional E2E env vars and secrets loaded from JSON in previous steps
         run: |
           echo "🎭 Running Playwright tests against deployed environment"
