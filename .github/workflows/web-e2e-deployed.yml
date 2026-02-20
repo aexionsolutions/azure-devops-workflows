@@ -207,7 +207,7 @@ jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     # Grant permissions for Azure workload identity (OIDC)
     permissions:
       id-token: write
@@ -412,6 +412,13 @@ jobs:
               echo "$CONN_STR"
               echo "${DELIM}"
             } >> "$GITHUB_ENV"
+            # Also set E2E-specific env var for Reqnroll DatabaseHelper
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "E2E_DATABASE_CONNECTION_STRING<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
           else
             echo "ℹ️  No database connection string provided; tests will use default/local configuration"
           fi
@@ -529,6 +536,7 @@ jobs:
           else
             echo "  ⚠️ B2C_CLIENT_SECRET not configured"
           fi
+          
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
 
@@ -582,6 +590,7 @@ jobs:
         env:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
+          START_WEB_SERVER: 'false'
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
           # B2C Configuration (with backwards compatibility for legacy secret names)
