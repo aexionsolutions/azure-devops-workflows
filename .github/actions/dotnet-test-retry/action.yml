@@ -210,13 +210,24 @@ runs:
             }
           }
 
-          # Include other "failure-like" outcomes too.
-          # NotExecuted = test never ran because a BeforeScenario/SetUp hook threw;
-          # these should be retried because the hook failure is usually transient.
-          $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted' or @outcome='NotExecuted']", $ns)
+          # Collect tests with explicitly failed/errored outcomes
+          $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
+
+          # Also collect NotExecuted tests, but ONLY those with <ErrorInfo>
+          # (= hook/setup failure that should be retried).
+          # Intentionally skipped tests ([Ignore], @ignore, Assert.Ignore) are
+          # also NotExecuted but have NO ErrorInfo — those should NOT be retried.
+          $notExecNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='NotExecuted']", $ns)
+          $hookFailures = @($notExecNodes | Where-Object {
+            $_.SelectSingleNode('trx:Output/trx:ErrorInfo', $ns) -ne $null
+          })
+          $skippedCount = $notExecNodes.Count - $hookFailures.Count
+          if ($skippedCount -gt 0) {
+            Write-Host ("   ℹ️ {0} intentionally-skipped test(s) will not be retried" -f $skippedCount)
+          }
 
           $failed = New-Object System.Collections.Generic.List[string]
-          foreach ($n in $failedNodes) {
+          foreach ($n in @($failedNodes) + $hookFailures) {
             $tn = $n.GetAttribute('testName')
             if ([string]::IsNullOrWhiteSpace($tn)) { continue }
             if ($map.ContainsKey($tn)) { $failed.Add($map[$tn]) } else { $failed.Add($tn) }
@@ -287,6 +298,7 @@ runs:
             $total = $allResults.Count
             $passed = 0; $failed = 0; $errored = 0
             $notExecuted = 0; $inconclusive = 0; $aborted = 0; $timeout = 0
+            $other = 0
             foreach ($r in $allResults) {
               switch ($r.GetAttribute('outcome')) {
                 'Passed'       { $passed++ }
@@ -296,7 +308,11 @@ runs:
                 'Inconclusive' { $inconclusive++ }
                 'Aborted'      { $aborted++ }
                 'Timeout'      { $timeout++ }
+                default        { $other++; $passed++ }  # Completed, Warning, etc. → treat as passed
               }
+            }
+            if ($other -gt 0) {
+              Write-Host ("   ℹ️ {0} test(s) with uncommon outcomes (Completed/Warning/etc.) counted as passed" -f $other)
             }
             $executed = $total - $notExecuted - $inconclusive
 
