@@ -3,6 +3,7 @@ description: 'Run dotnet tests with smart retry - only re-runs failed tests inst
 author: 'DevOps Team'
 # v4.3.0: Fixed critical infrastructure failure detection bug
 # v4.3.2: TRX missing on retry → fall back to last known failure list instead of aborting
+# v4.4.0: Track NotExecuted/Inconclusive TRX outcomes so summary totals add up; retry NotExecuted tests
 
 inputs:
   project:
@@ -119,14 +120,23 @@ runs:
             $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
             if ($counters -eq $null) { return $null }
 
-            return @{
-              total   = [int]$counters.GetAttribute('total')
-              passed  = [int]$counters.GetAttribute('passed')
-              failed  = [int]$counters.GetAttribute('failed')
-              error   = [int]$counters.GetAttribute('error')
-              aborted = [int]$counters.GetAttribute('aborted')
-              timeout = [int]$counters.GetAttribute('timeout')
+            # Read all counter attributes so totals always add up.
+            # TRX Counters include: total, passed, failed, error, timeout,
+            # aborted, inconclusive, notExecuted, completed, inProgress, etc.
+            $h = @{
+              total         = [int]$counters.GetAttribute('total')
+              passed        = [int]$counters.GetAttribute('passed')
+              failed        = [int]$counters.GetAttribute('failed')
+              error         = [int]$counters.GetAttribute('error')
+              aborted       = [int]$counters.GetAttribute('aborted')
+              timeout       = [int]$counters.GetAttribute('timeout')
+              notExecuted   = 0
+              inconclusive  = 0
             }
+            # These attributes may not exist in every TRX; guard with try/catch
+            try { $h.notExecuted  = [int]$counters.GetAttribute('notExecuted') }  catch {}
+            try { $h.inconclusive = [int]$counters.GetAttribute('inconclusive') } catch {}
+            return $h
           }
           catch {
             Write-Host "⚠️ Error parsing TRX counters: ${_}"
@@ -141,14 +151,21 @@ runs:
             $counters = $doc.Xml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $doc.Ns)
             if ($counters -eq $null) { return $null }
 
-            return @{
+            $h = @{
               total   = $counters.GetAttribute('total')
               passed  = $counters.GetAttribute('passed')
               failed  = $counters.GetAttribute('failed')
               error   = $counters.GetAttribute('error')
               aborted = $counters.GetAttribute('aborted')
               timeout = $counters.GetAttribute('timeout')
+              notExecuted  = '0'
+              inconclusive = '0'
             }
+            $ne = $counters.GetAttribute('notExecuted')
+            if (-not [string]::IsNullOrWhiteSpace($ne)) { $h.notExecuted = $ne }
+            $ic = $counters.GetAttribute('inconclusive')
+            if (-not [string]::IsNullOrWhiteSpace($ic)) { $h.inconclusive = $ic }
+            return $h
           }
           catch {
             Write-Host ("⚠️ Error parsing TRX summary: {0}" -f $_.Exception.Message)
@@ -193,8 +210,10 @@ runs:
             }
           }
 
-          # Include other "failure-like" outcomes too
-          $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
+          # Include other "failure-like" outcomes too.
+          # NotExecuted = test never ran because a BeforeScenario/SetUp hook threw;
+          # these should be retried because the hook failure is usually transient.
+          $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted' or @outcome='NotExecuted']", $ns)
 
           $failed = New-Object System.Collections.Generic.List[string]
           foreach ($n in $failedNodes) {
@@ -208,6 +227,119 @@ runs:
           }
 
           return @($failed | Sort-Object -Unique)
+        }
+
+        function Merge-TrxResults([string]$baseTrxPath, [int]$totalAttempts) {
+          # Produces a merged TRX that starts from the first attempt (full suite)
+          # and overwrites results for retried tests with their latest outcome.
+          # This fixes GitHub's test-results tab double-counting across TRX files.
+          
+          if ($totalAttempts -le 1) { return }
+          
+          $mergedPath = Join-Path $resultsDir ('{0}-merged.trx' -f $trxPrefix)
+          
+          try {
+            $baseDoc = Load-Trx $baseTrxPath
+            $baseXml = $baseDoc.Xml
+            $baseNs  = $baseDoc.Ns
+
+            # Build lookup: testName -> latest UnitTestResult node from retry TRXes
+            $latestResults = @{}
+            for ($a = 2; $a -le $totalAttempts; $a++) {
+              $retryTrx = Get-TrxPath $a
+              if (-not (Test-Path $retryTrx)) { continue }
+              try {
+                $retryDoc = Load-Trx $retryTrx
+                $retryNodes = $retryDoc.Xml.SelectNodes('//trx:Results/trx:UnitTestResult', $retryDoc.Ns)
+                foreach ($node in $retryNodes) {
+                  $tn = $node.GetAttribute('testName')
+                  if (-not [string]::IsNullOrWhiteSpace($tn)) {
+                    $latestResults[$tn] = $node
+                  }
+                }
+              }
+              catch {
+                Write-Host ("   ⚠️ Could not parse retry TRX {0}: {1}" -f $retryTrx, $_.Exception.Message)
+              }
+            }
+
+            if ($latestResults.Count -eq 0) {
+              Write-Host '   ℹ️ No retry results to merge'
+              return
+            }
+
+            # Overwrite matching results in base TRX
+            $resultsNode = $baseXml.SelectSingleNode('//trx:Results', $baseNs)
+            $baseResults = $baseXml.SelectNodes('//trx:Results/trx:UnitTestResult', $baseNs)
+            $updatedCount = 0
+
+            foreach ($baseResult in $baseResults) {
+              $tn = $baseResult.GetAttribute('testName')
+              if ($latestResults.ContainsKey($tn)) {
+                $imported = $baseXml.ImportNode($latestResults[$tn], $true)
+                $resultsNode.ReplaceChild($imported, $baseResult) | Out-Null
+                $updatedCount++
+              }
+            }
+
+            # Recalculate counters — track ALL outcome types so totals add up
+            $allResults = $baseXml.SelectNodes('//trx:Results/trx:UnitTestResult', $baseNs)
+            $total = $allResults.Count
+            $passed = 0; $failed = 0; $errored = 0
+            $notExecuted = 0; $inconclusive = 0; $aborted = 0; $timeout = 0
+            foreach ($r in $allResults) {
+              switch ($r.GetAttribute('outcome')) {
+                'Passed'       { $passed++ }
+                'Failed'       { $failed++ }
+                'Error'        { $errored++ }
+                'NotExecuted'  { $notExecuted++ }
+                'Inconclusive' { $inconclusive++ }
+                'Aborted'      { $aborted++ }
+                'Timeout'      { $timeout++ }
+              }
+            }
+            $executed = $total - $notExecuted - $inconclusive
+
+            $countersNode = $baseXml.SelectSingleNode('//trx:ResultSummary/trx:Counters', $baseNs)
+            if ($countersNode) {
+              $countersNode.SetAttribute('total', $total)
+              $countersNode.SetAttribute('executed', $executed)
+              $countersNode.SetAttribute('passed', $passed)
+              $countersNode.SetAttribute('failed', $failed)
+              $countersNode.SetAttribute('error', $errored)
+              $countersNode.SetAttribute('notExecuted', $notExecuted)
+              $countersNode.SetAttribute('inconclusive', $inconclusive)
+              $countersNode.SetAttribute('aborted', $aborted)
+              $countersNode.SetAttribute('timeout', $timeout)
+            }
+
+            # Update outcome
+            $summaryNode = $baseXml.SelectSingleNode('//trx:ResultSummary', $baseNs)
+            if ($summaryNode) {
+              $summaryNode.SetAttribute('outcome', $(if ($failed -gt 0 -or $errored -gt 0) { 'Failed' } else { 'Passed' }))
+            }
+
+            $baseXml.Save($mergedPath)
+
+            Write-Host ("   📊 Merged TRX: {0} (updated {1} retried test results)" -f $mergedPath, $updatedCount)
+            $mergedExtra = ''
+            if ($notExecuted -gt 0) { $mergedExtra += (', notExecuted={0}' -f $notExecuted) }
+            if ($inconclusive -gt 0) { $mergedExtra += (', inconclusive={0}' -f $inconclusive) }
+            Write-Host ("   📊 Merged totals: total={0}, passed={1}, failed={2}, error={3}{4}" -f $total, $passed, $failed, $errored, $mergedExtra)
+
+            # Remove individual attempt TRXes so GitHub only picks up the merged one
+            for ($a = 1; $a -le $totalAttempts; $a++) {
+              $attemptTrx = Get-TrxPath $a
+              if (Test-Path $attemptTrx) {
+                Remove-Item $attemptTrx -Force
+                Write-Host ("   🗑️ Removed attempt TRX: {0}" -f $attemptTrx)
+              }
+            }
+          }
+          catch {
+            Write-Host ("   ⚠️ TRX merge failed (non-fatal): {0}" -f $_.Exception.Message)
+            Write-Host "   Individual attempt TRXes will be uploaded instead."
+          }
         }
 
         function Build-OrFilter([string[]]$fqns) {
@@ -277,8 +409,11 @@ runs:
             Write-Host ("   TRX size: {0} bytes" -f ((Get-Item $trxPath).Length))
             $sum = Get-TrxSummary $trxPath
             if ($sum) {
-              Write-Host ("   TRX summary: total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}" -f `
-                $sum.total, $sum.passed, $sum.failed, $sum.error, $sum.aborted, $sum.timeout)
+              $extraInfo = ''
+              if ([int]$sum.notExecuted -gt 0) { $extraInfo += (', notExecuted={0}' -f $sum.notExecuted) }
+              if ([int]$sum.inconclusive -gt 0) { $extraInfo += (', inconclusive={0}' -f $sum.inconclusive) }
+              Write-Host ("   TRX summary: total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}{6}" -f `
+                  $sum.total, $sum.passed, $sum.failed, $sum.error, $sum.aborted, $sum.timeout, $extraInfo)
             } else {
               Write-Host "   TRX summary: (not found)"
             }
@@ -421,6 +556,7 @@ runs:
 
           if ($exitCode -eq 0) {
             Write-Host ('✅ Passed on attempt {0}' -f $attempt)
+            Merge-TrxResults (Get-TrxPath 1) $attempt
             'exit-code=0' >> $env:GITHUB_OUTPUT
             ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
             ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
@@ -447,11 +583,16 @@ runs:
         # Show the TRX summary from the first attempt (full test suite run)
         $firstTrxSum = Get-TrxSummary (Get-TrxPath 1)
 
+        Merge-TrxResults (Get-TrxPath 1) $attempt
+
         Write-Host ''
         Write-Host ('❌ Tests failed after {0} attempts' -f $maxAttempts)
         if ($firstTrxSum) {
-          Write-Host ('   TRX summary (attempt 1): total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}' -f `
-            $firstTrxSum.total, $firstTrxSum.passed, $firstTrxSum.failed, $firstTrxSum.error, $firstTrxSum.aborted, $firstTrxSum.timeout)
+          $firstExtra = ''
+          if ([int]$firstTrxSum.notExecuted -gt 0) { $firstExtra += (', notExecuted={0}' -f $firstTrxSum.notExecuted) }
+          if ([int]$firstTrxSum.inconclusive -gt 0) { $firstExtra += (', inconclusive={0}' -f $firstTrxSum.inconclusive) }
+          Write-Host ('   TRX summary (attempt 1): total={0}, passed={1}, failed={2}, error={3}, aborted={4}, timeout={5}{6}' -f `
+            $firstTrxSum.total, $firstTrxSum.passed, $firstTrxSum.failed, $firstTrxSum.error, $firstTrxSum.aborted, $firstTrxSum.timeout, $firstExtra)
         }
         Write-Host ('   Final failed tests: {0}' -f $lastFailed.Count)
 
