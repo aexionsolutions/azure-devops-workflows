@@ -47,6 +47,12 @@ on:
         type: boolean
         default: true
       
+      playwright_config:
+        description: 'Playwright config file for deployed tests (e.g., playwright.prod.config.ts). If set, --config is passed to npx playwright test. Default config may skip deployed-only tests via testIgnore.'
+        required: false
+        type: string
+        default: ''
+      
       playwright_project:
         description: 'Playwright project to run (e.g., chromium, firefox). Empty = all projects.'
         required: false
@@ -207,7 +213,7 @@ jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     # Grant permissions for Azure workload identity (OIDC)
     permissions:
       id-token: write
@@ -412,6 +418,13 @@ jobs:
               echo "$CONN_STR"
               echo "${DELIM}"
             } >> "$GITHUB_ENV"
+            # Also set E2E-specific env var for Reqnroll DatabaseHelper
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "E2E_DATABASE_CONNECTION_STRING<<${DELIM}"
+              echo "$CONN_STR"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
           else
             echo "ℹ️  No database connection string provided; tests will use default/local configuration"
           fi
@@ -529,6 +542,7 @@ jobs:
           else
             echo "  ⚠️ B2C_CLIENT_SECRET not configured"
           fi
+          
           echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
 
@@ -582,6 +596,7 @@ jobs:
         env:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
+          START_WEB_SERVER: 'false'
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
           # B2C Configuration (with backwards compatibility for legacy secret names)
@@ -594,8 +609,14 @@ jobs:
           echo "🎭 Running Playwright tests against deployed environment"
           echo "   Web URL: ${{ inputs.web_url }}"
           echo "   API URL: ${{ inputs.api_url }}"
+          echo "   Config: ${{ inputs.playwright_config || 'default' }}"
           echo "   Project: ${{ inputs.playwright_project || 'all projects' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
+          
+          config_arg=""
+          if [ -n "${{ inputs.playwright_config }}" ]; then
+            config_arg="--config=${{ inputs.playwright_config }}"
+          fi
           
           project_arg=""
           if [ -n "${{ inputs.playwright_project }}" ]; then
@@ -607,7 +628,7 @@ jobs:
             video_arg="--video=on"
           fi
           
-          npx playwright test $project_arg $video_arg --retries=${{ inputs.e2e_retry_attempts }}
+          npx playwright test $config_arg $project_arg $video_arg --retries=${{ inputs.e2e_retry_attempts }}
       
       # Upload Playwright artifacts
       - name: Upload Playwright report
@@ -683,6 +704,7 @@ jobs:
           if [ "${{ inputs.run_playwright_tests }}" = "true" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Playwright Tests:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Config: \`${{ inputs.playwright_config || 'default' }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- Project: \`${{ inputs.playwright_project || 'all projects' }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- Retry attempts: \`${{ inputs.e2e_retry_attempts }}\`" >> $GITHUB_STEP_SUMMARY
           fi
