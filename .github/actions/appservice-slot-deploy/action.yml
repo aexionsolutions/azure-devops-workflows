@@ -38,7 +38,7 @@ inputs:
   deploy-timeout-minutes:
     description: Maximum minutes to wait for package upload plus Azure OneDeploy completion before failing with diagnostics
     required: false
-    default: '20'
+    default: '40'
 runs:
   using: composite
   steps:
