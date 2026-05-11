@@ -35,12 +35,12 @@ fi
 
 mkdir -p _logs
 timeout_seconds=$((DEPLOY_TIMEOUT_MINUTES * 60))
-start_timeout_seconds=120
 poll_interval_seconds=10
-start_timeout_ms=$((start_timeout_seconds * 1000))
+az_timeout_ms=$((timeout_seconds * 1000))
 start_log_file="_logs/deploy-${target}-start.log"
 kudu_latest_file="_logs/${target}-kudu-latest.json"
 kudu_log_file="_logs/${target}-kudu-latest-log.json"
+package_size_bytes=$(stat -c%s "$PACKAGE" 2>/dev/null || wc -c < "$PACKAGE" | tr -d ' ')
 
 user=$(az webapp deployment list-publishing-credentials -g "$RG" -n "$APP" "${slot_args[@]}" --query publishingUserName -o tsv 2>"_logs/${target}-publishing-user.err" || true)
 pass=$(az webapp deployment list-publishing-credentials -g "$RG" -n "$APP" "${slot_args[@]}" --query publishingPassword -o tsv 2>"_logs/${target}-publishing-password.err" || true)
@@ -70,9 +70,11 @@ if [ -n "$user" ] && [ -n "$pass" ]; then
   fi
 fi
 
-echo "Starting async package deployment for $PACKAGE to $APP ($target). Start timeout: ${start_timeout_seconds}s; completion timeout: ${DEPLOY_TIMEOUT_MINUTES}m ..."
+echo "Starting async package deployment for $PACKAGE to $APP ($target)."
+echo "Package size: ${package_size_bytes} bytes. Upload + completion timeout: ${DEPLOY_TIMEOUT_MINUTES}m ..."
+deadline=$((SECONDS + timeout_seconds))
 set +e
-timeout "${start_timeout_seconds}s" az webapp deploy \
+timeout "${timeout_seconds}s" az webapp deploy \
   --resource-group "$RG" \
   --name "$APP" \
   "${slot_args[@]}" \
@@ -80,14 +82,14 @@ timeout "${start_timeout_seconds}s" az webapp deploy \
   --type zip \
   --restart true \
   --async true \
-  --timeout "$start_timeout_ms" \
+  --timeout "$az_timeout_ms" \
   --output json >"$start_log_file" 2>&1
 status=$?
 set -e
 
 if [ "$status" -eq 124 ]; then
-  echo "Package deployment start timed out after ${start_timeout_seconds} seconds for $APP ($target)." >&2
-  echo "deploy start-timeout $target" > "$RUNNER_TEMP/deploy_fail.txt"
+  echo "Package upload/deployment timed out after ${DEPLOY_TIMEOUT_MINUTES} minutes for $APP ($target)." >&2
+  echo "deploy upload-timeout $target" > "$RUNNER_TEMP/deploy_fail.txt"
   tail -n 160 "$start_log_file" || true
   exit 0
 elif [ "$status" -ne 0 ]; then
@@ -106,7 +108,6 @@ if [ -z "$user" ] || [ -z "$pass" ]; then
 fi
 
 echo "Polling Kudu deployment status at $kudu_base ..."
-deadline=$((SECONDS + timeout_seconds))
 last_status=""
 while [ "$SECONDS" -lt "$deadline" ]; do
   if curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/latest" -o "$kudu_latest_file" 2>"_logs/${target}-kudu-latest.err"; then
