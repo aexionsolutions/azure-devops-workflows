@@ -90,6 +90,8 @@ on:
         required: false
       e2e_secrets:
         required: false
+      b2c_web_client_id:
+        required: false
       b2c_client_secret:
         required: false
 
@@ -295,6 +297,7 @@ jobs:
           APP: ${{ inputs['app-name'] }}
           USE_SLOT: ${{ steps.resolve.outputs.use_slot }}
           B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+          B2C_WEB_CLIENT_ID: ${{ secrets.b2c_web_client_id }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
         run: bash ./shared/.github/scripts/configure-web-auth-settings.sh
@@ -587,6 +590,7 @@ jobs:
           APP: ${{ inputs['app-name'] }}
           USE_SLOT: ${{ steps.resolve.outputs.use_slot }}
           B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+          B2C_WEB_CLIENT_ID: ${{ secrets.b2c_web_client_id }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
         run: bash ./shared/.github/scripts/configure-web-auth-settings.sh

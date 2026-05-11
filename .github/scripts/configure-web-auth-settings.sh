@@ -2,7 +2,7 @@
 set -euo pipefail
 
 AUTHORITY="${B2C_AUTHORITY:-}"
-CLIENT_ID="${B2C_CLIENT_ID:-}"
+CLIENT_ID="${B2C_WEB_CLIENT_ID:-${B2C_CLIENT_ID:-}}"
 API_SCOPE="${B2C_SCOPE:-}"
 USE_SLOT="${USE_SLOT:-false}"
 
@@ -13,7 +13,7 @@ fi
 
 missing=()
 [ -n "$AUTHORITY" ] || missing+=("b2c_authority")
-[ -n "$CLIENT_ID" ] || missing+=("b2c_client_id")
+[ -n "$CLIENT_ID" ] || missing+=("b2c_web_client_id or b2c_client_id")
 [ -n "$API_SCOPE" ] || missing+=("b2c_scope")
 
 if [ "${#missing[@]}" -gt 0 ]; then
