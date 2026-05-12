@@ -342,6 +342,7 @@ jobs:
     name: Verify Web Deployment
     needs: deploy-staging
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: ${{ inputs.environment }}
     env:
       CALLER_WORKDIR: caller
