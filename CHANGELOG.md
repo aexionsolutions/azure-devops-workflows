@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **App Service deployment diagnostics:** Package deployment now uses bounded Azure CLI/Kudu polling instead of `azure/webapps-deploy`, with a 40-minute default deploy timeout and `appservice-logs-<app-name>` diagnostics on deploy or warm-up failures.
+- **Web deployment auth settings:** `deploy-template-web.yml` can apply runtime B2C web auth settings before deployment, using `secrets.b2c_web_client_id` as the preferred web app client ID and `b2c_client_id` as a fallback.
+- **Bounded Playwright setup:** Deployed E2E runs now support `playwright_install_timeout_minutes`, install only the browser dependencies needed by the selected browser project, and avoid reinstalling Linux dependencies for Reqnroll when web Playwright already installed them.
+
+### Changed
+
+- **Deployed Reqnroll default filter:** `web-e2e-deployed.yml` now defaults to `@deployed-smoke`; simple tags map to both `Category` and `TestCategory`, while explicit VSTest filters are passed through unchanged.
+- **Playwright smoke action:** Browser install and system dependency install are split into separate timed steps with launch probing before Linux dependency installation.
+
 ### Fixed
+
+- **Smart Test Retry:** Intentional deployed-safety `NotExecuted` skips are ignored by retry selection so skipped non-`@deployed-smoke` scenarios do not trigger needless retries.
 
 #### Smart Test Retry: NotExecuted/Inconclusive TRX outcomes now tracked (v4.4.0)
 

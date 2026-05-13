@@ -7,6 +7,8 @@ The `web-e2e-deployed.yml` reusable workflow runs end-to-end tests against **alr
 - ✅ **Tests deployed Azure resources** - API + Web + Database already running
 - ✅ **No Docker services** - Uses your actual cloud infrastructure
 - ✅ **Health checks** - Verifies services are ready before testing
+- ✅ **Deployed-safe Reqnroll default** - Runs `@deployed-smoke` by default to avoid accidental mutating full-suite runs
+- ✅ **Bounded Playwright setup** - Installs only the needed browser dependencies and times out clearly if setup stalls
 - ✅ **Higher retry logic** - Default 3 retries for deployed environment flakiness
 - ✅ **Supports test artifacts** - Works with pre-built test packages
 - ✅ **Post-deployment validation** - Runs after deployment completes
@@ -42,7 +44,7 @@ jobs:
 
 This will:
 - Wait for API and Web health checks
-- Run Reqnroll tests with `@smoke` filter (default)
+- Run Reqnroll tests with `@deployed-smoke` filter (default)
 - Run Playwright tests (default)
 - Retry failed tests up to 3 times (default for deployed envs)
 
@@ -81,11 +83,11 @@ jobs:
       web_url: https://tems-dev-web.azurewebsites.net
       api_url: https://tems-dev-api.azurewebsites.net
       web_directory: web/tems-portal
-      test_filter: '@smoke'  # Fast feedback
+      test_filter: '@deployed-smoke'  # Fast feedback without mutating full-suite coverage
       e2e_retry_attempts: 3
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.DEV_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.DEV_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.DEV_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.DEV_E2E_TEST_USER_PASSWORD }}
 ```
 
 **Duration:** ~3-5 minutes  
@@ -125,13 +127,13 @@ jobs:
       web_url: https://tems-${{ inputs.environment }}-web.azurewebsites.net
       api_url: https://tems-${{ inputs.environment }}-api.azurewebsites.net
       web_directory: web/tems-portal
-      test_filter: '@smoke or @regression'  # More comprehensive
+      test_filter: '(Category=smoke|Category=regression|TestCategory=smoke|TestCategory=regression)'  # More comprehensive
       e2e_retry_attempts: 3
       e2e_enable_video: true  # Capture failures
       health_check_timeout: 600  # Longer timeout for production
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
+      B2C_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
 ```
 
 **Duration:** ~10-20 minutes  
@@ -188,7 +190,7 @@ jobs:
       azure_keyvault_secret_name: PostgresConnectionString
       
       # Test Configuration
-      test_filter: '@smoke'
+      test_filter: '@deployed-smoke'
       e2e_retry_attempts: 3
     secrets:
       # Azure Authentication (for Key Vault access)
@@ -197,8 +199,8 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}  # Fallback if OIDC not configured
       # Test Credentials
-      E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
+      B2C_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
 ```
 
 **What this does:**
@@ -234,8 +236,8 @@ jobs:
       test_filter: '@critical'  # Only critical paths
       e2e_retry_attempts: 2  # Less retries for health checks
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.PROD_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.PROD_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.PROD_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.PROD_E2E_TEST_USER_PASSWORD }}
 ```
 
 **Duration:** ~2-3 minutes  
@@ -275,7 +277,30 @@ jobs:
       web_url: https://tems-dev-web.azurewebsites.net
       api_url: https://tems-dev-api.azurewebsites.net
       run_playwright_tests: false
-      test_filter: '@api or @backend'
+      test_filter: '(Category=api|Category=backend|TestCategory=api|TestCategory=backend)'
+```
+
+---
+
+## Reqnroll Filter Behavior
+
+Deployed Reqnroll tests now default to `@deployed-smoke`. This is intentionally narrower than the CI `@smoke` convention so deployed environments do not run mutating or broad scenarios unless the caller opts in.
+
+Filter handling:
+- Empty or omitted `test_filter` becomes `@deployed-smoke`.
+- A simple tag such as `@deployed-smoke` or `@critical` is converted to `(Category=<tag>|TestCategory=<tag>)`, which supports both NUnit category names emitted by Reqnroll.
+- Advanced VSTest filters containing operators such as `=`, `~`, `&`, `|`, `(`, or `)` are passed through unchanged.
+- Intentional deployed-safety skips that surface in TRX as `NotExecuted` are not retried by the smart retry action.
+
+Use explicit filters when you really want a broader deployed run:
+
+```yaml
+with:
+  # Default safe smoke set
+  test_filter: '@deployed-smoke'
+
+  # A broader category set
+  test_filter: '(Category=smoke|Category=regression|TestCategory=smoke|TestCategory=regression)'
 ```
 
 ---
@@ -300,11 +325,15 @@ jobs:
 | Input | Default | Description |
 |-------|---------|-------------|
 | `e2e_project` | `''` | Path to Reqnroll test .csproj. Empty = skip Reqnroll tests. |
-| `test_filter` | `'@smoke'` | Reqnroll test filter (e.g., `@smoke`, `@regression`) |
+| `test_filter` | `'@deployed-smoke'` | Reqnroll test filter. Simple tags are mapped to both `Category` and `TestCategory`; advanced VSTest filters are passed through unchanged. |
 | `run_playwright_tests` | `true` | Run Playwright tests |
-| `playwright_project` | `''` | Playwright project (e.g., `chromium`, `firefox`). Empty = all. |
+| `playwright_config` | `''` | Playwright config file for deployed tests. If set, `--config` is passed to `npx playwright test`. |
+| `playwright_project` | `''` | Playwright project (e.g., `chromium`, `firefox`). Empty = run all projects; install step defaults to Chromium dependencies. |
 | `e2e_retry_attempts` | `3` | Retry attempts (higher default than CI workflow) |
+| `playwright_retry_attempts` | `2` | Retry attempts passed to Playwright |
+| `playwright_install_timeout_minutes` | `15` | Maximum minutes for Playwright browser/system dependency installation |
 | `e2e_enable_video` | `false` | Capture video recordings |
+| `console_verbosity` | `normal` | Console logger verbosity for `dotnet test` |
 
 ### Infrastructure
 
@@ -336,6 +365,15 @@ jobs:
 | `azure_keyvault_name` | `''` | Azure Key Vault name to retrieve database connection string from |
 | `azure_keyvault_secret_name` | `'PostgresConnectionString'` | Secret name in Key Vault for database connection string |
 
+### Additional E2E Configuration
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `e2e_env_vars` | `'{}'` | JSON object of additional non-secret environment variables to expose to tests. |
+| `b2c_authority` | `''` | Azure B2C authority URL for Reqnroll and Playwright auth flows. |
+| `b2c_client_id` | `''` | Azure B2C client ID for deployed E2E auth flows. |
+| `b2c_scope` | `''` | Azure B2C API scope for deployed E2E auth flows. |
+
 **Note:** Database connection retrieval priority:
 1. Azure Key Vault (if `azure_keyvault_name` is set)
 2. Direct input (`database_connection_string`)
@@ -351,9 +389,15 @@ jobs:
 | `AZURE_SUBSCRIPTION_ID` | No | Azure Subscription ID for Key Vault access |
 | `AZURE_CREDENTIALS` | No | Azure credentials JSON (legacy service principal auth method for Key Vault) |
 | `E2E_AUTH_TOKEN` | No | Authentication token for deployed environment |
-| `E2E_TEST_USER_EMAIL` | No | Test user email for authentication tests |
-| `E2E_TEST_USER_PASSWORD` | No | Test user password for authentication tests |
 | `DATABASE_CONNECTION_STRING` | No | Database connection string (alternative to Key Vault) |
+| `b2c_client_secret` | No | Preferred B2C client secret for E2E auth flows |
+| `e2e_secrets` | No | JSON object of additional secret environment variables to expose to tests. Values are masked in logs. |
+| `AAD_B2C_AUTHORITY` | No | Legacy B2C authority secret. Prefer `b2c_authority` input. |
+| `B2C_SMOKE_CLIENT_ID` | No | Legacy B2C client ID secret. Prefer `b2c_client_id` input. |
+| `AAD_B2C_API_SCOPE` | No | Legacy B2C scope secret. Prefer `b2c_scope` input. |
+| `B2C_SMOKE_CLIENT_SECRET` | No | Legacy B2C client secret. Prefer `secrets.b2c_client_secret`. |
+| `B2C_TEST_USER_EMAIL` | No | B2C test user email for deployed Playwright auth tests |
+| `B2C_TEST_USER_PASSWORD` | No | B2C test user password for deployed Playwright auth tests |
 
 ---
 
@@ -365,17 +409,19 @@ The workflow automatically sets these environment variables for your tests:
 
 ```bash
 RUN_E2E=true
-RAVENXPRESS_E2E_ENV=dev  # From environment_name input
+E2E_ENVIRONMENT=dev  # From environment_name input
 E2E_BASE_URL=https://tems-dev-web.azurewebsites.net
 E2E_API_BASE_URL=https://tems-dev-api.azurewebsites.net
 E2E_HEADLESS=true
 E2E_SLOWMO=0
 E2E_ENABLE_VIDEO=false
 E2E_AUTH_TOKEN=<secret>
-E2E_TEST_USER_EMAIL=<secret>
-E2E_TEST_USER_PASSWORD=<secret>
 E2E_API_KEY=<input>
 E2E_RETRY_ATTEMPTS=3
+B2C_AUTHORITY=<input-or-legacy-secret>
+B2C_CLIENT_ID=<input-or-legacy-secret>
+B2C_SCOPE=<input-or-legacy-secret>
+B2C_CLIENT_SECRET=<secret>
 ConnectionStrings__Postgres=<from Key Vault or input>
 ```
 
@@ -385,9 +431,13 @@ ConnectionStrings__Postgres=<from Key Vault or input>
 BASE_URL=https://tems-dev-web.azurewebsites.net
 API_BASE_URL=https://tems-dev-api.azurewebsites.net
 E2E_AUTH_TOKEN=<secret>
-E2E_TEST_USER_EMAIL=<secret>
-E2E_TEST_USER_PASSWORD=<secret>
 E2E_API_KEY=<input>
+B2C_AUTHORITY=<input-or-legacy-secret>
+B2C_CLIENT_ID=<input-or-legacy-secret>
+B2C_SCOPE=<input-or-legacy-secret>
+B2C_CLIENT_SECRET=<secret>
+B2C_TEST_USER_EMAIL=<secret>
+B2C_TEST_USER_PASSWORD=<secret>
 ```
 
 ---
@@ -479,8 +529,8 @@ jobs:
         run: |
           cd web/tems-portal
           npm ci
-          npx playwright install --with-deps
-          # Copy entire web directory for Playwright
+          # Browser/system dependencies are installed by the deployed workflow at run time.
+          # Copy entire web directory for Playwright.
           cd ../..
           cp -r web/tems-portal e2e-tests/playwright
       
@@ -558,7 +608,7 @@ jobs:
           E2E_BASE_URL: https://tems-${{ inputs.environment }}-web.azurewebsites.net
           E2E_API_BASE_URL: https://tems-${{ inputs.environment }}-api.azurewebsites.net
         run: |
-          dotnet test Ems.E2E.dll --filter "TestCategory=@smoke"
+          dotnet test Ems.E2E.dll --filter "(Category=deployed-smoke|TestCategory=deployed-smoke)"
       
       - name: Run Playwright tests
         working-directory: e2e-tests/playwright
@@ -667,8 +717,8 @@ jobs:
 1. **Verify secrets are set:**
    ```yaml
    secrets:
-     E2E_TEST_USER_EMAIL: ${{ secrets.DEV_E2E_TEST_USER_EMAIL }}
-     E2E_TEST_USER_PASSWORD: ${{ secrets.DEV_E2E_TEST_USER_PASSWORD }}
+     B2C_TEST_USER_EMAIL: ${{ secrets.DEV_E2E_TEST_USER_EMAIL }}
+     B2C_TEST_USER_PASSWORD: ${{ secrets.DEV_E2E_TEST_USER_PASSWORD }}
    ```
 
 2. **Check API key if required:**
@@ -708,6 +758,32 @@ jobs:
 
 ---
 
+### Playwright Install Times Out
+
+**Symptom:** Browser or Linux dependency installation fails after the configured timeout.
+
+**Solutions:**
+
+1. **Increase the bounded install window:**
+   ```yaml
+   with:
+     playwright_install_timeout_minutes: 20
+   ```
+
+2. **Pin the deployed Playwright project to one browser when possible:**
+   ```yaml
+   with:
+     playwright_project: chromium
+   ```
+
+3. **Use a deployed-specific Playwright config to avoid local-only projects:**
+   ```yaml
+   with:
+     playwright_config: playwright.prod.config.ts
+   ```
+
+---
+
 ### Wrong Test Version Running
 
 **Symptom:** Tests fail because they expect newer features that don't exist in the deployed code
@@ -723,11 +799,11 @@ jobs:
 ### 1. Use Different Test Filters per Environment
 
 ```yaml
-# Development: Fast feedback
-test_filter: '@smoke'
+# Development: deployed-safe smoke coverage
+test_filter: '@deployed-smoke'
 
 # Staging: More comprehensive
-test_filter: '@smoke or @regression'
+test_filter: '(Category=smoke|Category=regression|TestCategory=smoke|TestCategory=regression)'
 
 # Production: Critical paths only
 test_filter: '@critical'
@@ -747,8 +823,8 @@ e2e_retry_attempts: 3
 
 ```yaml
 secrets:
-  E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
-  E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
+  B2C_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
+  B2C_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
 ```
 
 ### 4. Monitor Production with Scheduled Tests
@@ -810,12 +886,12 @@ jobs:
       web_url: https://tems-staging-web.azurewebsites.net
       api_url: https://tems-staging-api.azurewebsites.net
       web_directory: web/tems-portal
-      test_filter: '@smoke'
+      test_filter: '@deployed-smoke'
       e2e_retry_attempts: 3
       health_check_timeout: 600
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
   
   # E2E Regression (only if smoke passes)
   e2e-regression:
@@ -831,8 +907,8 @@ jobs:
       e2e_retry_attempts: 3
       e2e_enable_video: true
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
 ```
 
 ---

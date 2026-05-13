@@ -122,9 +122,11 @@ jobs:
 | [dotnet-ci.yml](.github/workflows/dotnet-ci.yml) | .NET build, test, coverage, SonarCloud | `js_lcov_path`, `sonar_exclusions`, `sonar_coverage_exclusions` | ✅ Ready |
 | [web-ci.yml](.github/workflows/web-ci.yml) | React/Next.js lint, test | - | ✅ Ready |
 | [web-e2e-ci.yml](.github/workflows/web-e2e-ci.yml) | E2E tests with Docker services (PR validation) | `solution`, `api_project`, `web_directory` | ✅ Ready |
-| [web-e2e-deployed.yml](.github/workflows/web-e2e-deployed.yml) | E2E tests against deployed environments | `web_url`, `api_url` | ✅ Ready |
+| [web-e2e-deployed.yml](.github/workflows/web-e2e-deployed.yml) | E2E tests against deployed environments with deployed-safe Reqnroll filtering and bounded Playwright setup | `web_url`, `api_url` | ✅ Ready |
 | [web-deploy.yml](.github/workflows/web-deploy.yml) | Next.js build & package | `web_directory`, `concurrency_group` | ✅ Ready |
 | [api-deploy.yml](.github/workflows/api-deploy.yml) | .NET API build & package | `api_project`, `concurrency_group` | ✅ Ready |
+| [deploy-template-web.yml](.github/workflows/deploy-template-web.yml) | Deploy packaged web apps to App Service with slot verification, B2C web auth settings, and diagnostics | `environment`, `app-name`, package or artifact | ✅ Ready |
+| [appservice-slot-deploy.yml](.github/workflows/appservice-slot-deploy.yml) | Generic App Service ZIP deployment, warm-up, optional slot swap, and failure diagnostics | `environment`, `resource-group`, `app-name`, package or artifact | ✅ Ready |
 | [azure-infra-deploy.yml](.github/workflows/azure-infra-deploy.yml) | Deploy Bicep infrastructure | `environment`, `resource_group`, `name_prefix` | ✅ Ready |
 
 ---
@@ -296,10 +298,13 @@ jobs:
 | `api_url` | ✅ | Deployed API URL | `https://tems-dev-api.azurewebsites.net` |
 | `e2e_project` | ❌ | E2E test .csproj (Reqnroll) | `tests/Ems.E2E/Ems.E2E.csproj` |
 | `web_directory` | ❌ | Web project path (for Playwright) | `web/tems-portal` |
-| `test_filter` | ❌ | Reqnroll test filter | `@smoke` (default) |
+| `test_filter` | ❌ | Reqnroll test filter. Defaults to deployed-safe tests. Simple tags match both NUnit `Category` and `TestCategory`; advanced VSTest filters are passed through. | `@deployed-smoke` (default) |
 | `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) |
+| `playwright_config` | ❌ | Playwright config file for deployed tests | `playwright.prod.config.ts` |
 | `playwright_project` | ❌ | Playwright project | `chromium`, `firefox` |
 | `e2e_retry_attempts` | ❌ | Retry attempts | `3` (default for deployed) |
+| `playwright_retry_attempts` | ❌ | Playwright retry attempts | `2` (default) |
+| `playwright_install_timeout_minutes` | ❌ | Maximum time for Playwright browser/system dependency install | `15` (default) |
 | `e2e_enable_video` | ❌ | Capture video recordings | `false` (default) |
 | `health_check_enabled` | ❌ | Health checks before tests | `true` (default) |
 | `health_check_timeout` | ❌ | Health check timeout (seconds) | `300` (default) |
@@ -334,11 +339,12 @@ jobs:
       web_url: https://tems-staging-web.azurewebsites.net
       api_url: https://tems-staging-api.azurewebsites.net
       web_directory: web/tems-portal
-      test_filter: '@smoke or @critical'
+      test_filter: '(Category=smoke|Category=critical|TestCategory=smoke|TestCategory=critical)'
+      playwright_install_timeout_minutes: 15
       e2e_retry_attempts: 3
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
 ```
 
 **See [web-e2e-deployed-guide.md](docs/web-e2e-deployed-guide.md) for complete documentation including:**
@@ -357,6 +363,30 @@ jobs:
 | `concurrency_group` | ✅ | Build group name | `tems-web-build` |
 | `release_tag` | ❌ | Release tag | `v1.2.3` |
 | `allow_override` | ❌ | Replace existing asset | `false` |
+
+### deploy-template-web.yml
+
+Use this workflow during release promotion after `web.zip` has already been built. It deploys to a staging slot when supported, verifies the deployed web app with Playwright, then swaps or warms production.
+
+| Input/Secret | Required | Description | Example |
+|--------------|----------|-------------|---------|
+| `environment` | ✅ | GitHub/Azure environment name | `uat` |
+| `app-name` | ✅ | App Service name | `tems-uat-web` |
+| `resource-group` | ❌ | Resource group. If empty, environment resource group secrets can resolve it. | `tems-uat-rg` |
+| `artifact-name` or `package` | ✅ | Artifact name to download or local ZIP path | `web` / `web.zip` |
+| `warmup-url-staging` | ❌ | Staging health URL used before verification | `https://tems-uat-web-staging.azurewebsites.net/healthz` |
+| `warmup-url-prod` | ❌ | Production health URL used after swap/direct deploy | `https://tems-uat-web.azurewebsites.net/healthz` |
+| `expect-version` | ❌ | Version string to set and verify after warm-up | `1.2.3` |
+| `version-url` | ❌ | Explicit version endpoint. If omitted and warm-up ends in `/healthz`, `/_meta` is tried. | `https://tems-uat-web.azurewebsites.net/_meta` |
+| `b2c_authority` | ❌ | B2C authority used for web runtime auth settings | `https://tenant.b2clogin.com/...` |
+| `b2c_client_id` | ❌ | Fallback web client ID when `secrets.b2c_web_client_id` is not set | `00000000-0000-0000-0000-000000000000` |
+| `b2c_scope` | ❌ | API scope used by the web app | `https://tenant.onmicrosoft.com/api/access_as_user` |
+| `secrets.b2c_web_client_id` | ❌ | Preferred web app B2C client ID. Keeps smoke/client IDs separate from runtime web auth. | GitHub secret |
+| `secrets.b2c_client_secret` | ❌ | B2C client secret used by deployed auth smoke verification | GitHub secret |
+
+When any B2C web auth setting is supplied, `b2c_authority`, `b2c_scope`, and either `secrets.b2c_web_client_id` or `b2c_client_id` must all be present. The deployment writes both server-side and `NEXT_PUBLIC_` auth settings for production, and for staging when slots are used.
+
+App Service package deployment is bounded by the composite action's 40-minute default timeout. If upload, Kudu/OneDeploy completion, warm-up, or verification fails, the workflow uploads `appservice-logs-<app-name>` with App Service state, deploy settings, Kudu deployment metadata/logs, and App Service log downloads where available.
 
 ### api-deploy.yml
 
