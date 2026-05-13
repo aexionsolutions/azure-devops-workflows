@@ -36,10 +36,10 @@ on:
       
       # Test Execution Options
       test_filter:
-        description: 'Reqnroll test filter (e.g., @smoke, @regression, @critical). Empty = all tests.'
+        description: 'Reqnroll test filter. Defaults to deployed-safe @deployed-smoke tests. Use an explicit VSTest filter for advanced cases.'
         required: false
         type: string
-        default: '@smoke'
+        default: '@deployed-smoke'
       
       run_playwright_tests:
         description: 'Run Playwright tests from web_directory'
@@ -70,6 +70,12 @@ on:
         required: false
         type: number
         default: 2
+
+      playwright_install_timeout_minutes:
+        description: 'Maximum minutes allowed for Playwright browser/system dependency installation'
+        required: false
+        type: number
+        default: 15
       
       e2e_enable_video:
         description: 'Enable video recording for tests (increases artifact size)'
@@ -375,18 +381,46 @@ jobs:
           cache: 'npm'
           cache-dependency-path: caller/${{ inputs.web_directory }}/package-lock.json
       
-      # Install Playwright dependencies
-      - name: Install Playwright dependencies
+      # Install web dependencies
+      - name: Install web dependencies
         if: inputs.run_playwright_tests && inputs.web_directory != ''
         working-directory: caller/${{ inputs.web_directory }}
         run: |
           npm ci
-          npx playwright install --with-deps
+
+      # Install only the browser/dependencies needed by the deployed Playwright project.
+      - name: Install Playwright dependencies
+        if: inputs.run_playwright_tests && inputs.web_directory != ''
+        working-directory: caller/${{ inputs.web_directory }}
+        env:
+          PLAYWRIGHT_PROJECT: ${{ inputs.playwright_project }}
+          PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES: ${{ inputs.playwright_install_timeout_minutes }}
+        run: |
+          set -euo pipefail
+
+          browser="$PLAYWRIGHT_PROJECT"
+          case "$browser" in
+            chromium|firefox|webkit)
+              ;;
+            "")
+              browser="chromium"
+              ;;
+            *)
+              echo "Playwright project '$browser' is not a browser name; installing chromium dependencies."
+              browser="chromium"
+              ;;
+          esac
+
+          echo "Installing Playwright browser/system dependencies for $browser (timeout: ${PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES}m)..."
+          timeout "${PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES}m" npx playwright install --with-deps "$browser"
       
       # Install Playwright browsers for Reqnroll tests (if using Microsoft.Playwright)
       - name: Install Playwright for Reqnroll
         if: inputs.e2e_project != ''
         shell: bash
+        env:
+          WEB_PLAYWRIGHT_DEPS_INSTALLED: ${{ inputs.run_playwright_tests && inputs.web_directory != '' }}
+          PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES: ${{ inputs.playwright_install_timeout_minutes }}
         run: |
           # Check if project uses Microsoft.Playwright
           if grep -q "Microsoft.Playwright" "${{ inputs.e2e_project }}"; then
@@ -396,7 +430,11 @@ jobs:
             # Find playwright.ps1 in any bin subfolder (handles Debug/Release + any target framework)
             PLAYWRIGHT_SCRIPT=$(find "$proj_dir" -path "*/bin/*/*/playwright.ps1" 2>/dev/null | head -n1)
             if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
-              pwsh "$PLAYWRIGHT_SCRIPT" install chromium --with-deps
+              if [ "$WEB_PLAYWRIGHT_DEPS_INSTALLED" = "true" ]; then
+                timeout "${PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES}m" pwsh "$PLAYWRIGHT_SCRIPT" install chromium
+              else
+                timeout "${PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES}m" pwsh "$PLAYWRIGHT_SCRIPT" install chromium --with-deps
+              fi
             else
               echo "⚠️ playwright.ps1 not found; skipping browser install (Playwright may auto-install on first run)"
             fi
@@ -556,21 +594,26 @@ jobs:
             echo "  ⚠️ B2C_CLIENT_SECRET not configured"
           fi
           
-          echo "   Filter: ${{ inputs.test_filter || 'all tests' }}"
+          echo "   Filter: ${{ inputs.test_filter || '@deployed-smoke' }}"
           echo "   Retry attempts: ${{ inputs.e2e_retry_attempts }}"
 
       - name: Prepare test filter
         id: filter
         run: |
-          # Strip @ prefix from Gherkin tags (e.g., @smoke -> smoke)
           FILTER="${{ inputs.test_filter }}"
+          if [ -z "$FILTER" ]; then
+            FILTER="@deployed-smoke"
+          fi
+
+          # Strip @ prefix from Gherkin tags (for example @deployed-smoke -> deployed-smoke).
           FILTER="${FILTER#@}"
           
-          # Build category filter if provided
-          if [ -n "$FILTER" ]; then
-            echo "filter=Category=$FILTER" >> $GITHUB_OUTPUT
+          if [[ "$FILTER" == *"="* || "$FILTER" == *"~"* || "$FILTER" == *"&"* || "$FILTER" == *"|"* || "$FILTER" == *"("* || "$FILTER" == *")"* ]]; then
+            echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
+          elif [ -n "$FILTER" ]; then
+            echo "filter=(Category=$FILTER|TestCategory=$FILTER)" >> "$GITHUB_OUTPUT"
           else
-            echo "filter=" >> $GITHUB_OUTPUT
+            echo "filter=(Category=deployed-smoke|TestCategory=deployed-smoke)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run Reqnroll E2E tests
@@ -712,7 +755,7 @@ jobs:
           
           if [ -n "${{ inputs.e2e_project }}" ]; then
             echo "**Reqnroll Tests:**" >> $GITHUB_STEP_SUMMARY
-            echo "- Filter: \`${{ inputs.test_filter || 'all tests' }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Filter: \`${{ inputs.test_filter || '@deployed-smoke' }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- Retry attempts: \`${{ inputs.e2e_retry_attempts }}\`" >> $GITHUB_STEP_SUMMARY
           fi
           

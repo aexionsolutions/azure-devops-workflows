@@ -111,6 +111,28 @@ function Get-TrxSummary([string]$trxPath) {
   }
 }
 
+function Test-IntentionalNotExecutedSkip {
+  param(
+    [System.Xml.XmlNode]$Node,
+    [System.Xml.XmlNamespaceManager]$Ns
+  )
+
+  $messageNode = $Node.SelectSingleNode('trx:Output/trx:ErrorInfo/trx:Message', $Ns)
+  $stackNode = $Node.SelectSingleNode('trx:Output/trx:ErrorInfo/trx:StackTrace', $Ns)
+  $parts = @()
+  if ($messageNode -ne $null) { $parts += $messageNode.InnerText }
+  if ($stackNode -ne $null) { $parts += $stackNode.InnerText }
+
+  $text = $parts -join "`n"
+  if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+
+  return (
+    $text -like '*Skipping non-@deployed-smoke scenario*' -or
+    $text -like '*Use tools/e2e/run-deployed-e2e.ps1*' -or
+    $text -like '*run-deployed-e2e.ps1*AllowMutatingFullRun*'
+  )
+}
+
 function Get-FailedFQNsFromTrx([string]$trxPath) {
   # Return $null (not @()) when TRX is missing/unreadable so caller can distinguish
   # between "TRX exists with 0 failures" vs "TRX doesn't exist/corrupt"
@@ -151,17 +173,23 @@ function Get-FailedFQNsFromTrx([string]$trxPath) {
   # Collect tests with explicitly failed/errored outcomes
   $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
 
-  # Also collect NotExecuted tests, but ONLY those with <ErrorInfo>
-  # (= hook/setup failure that should be retried).
-  # Intentionally skipped tests ([Ignore], @ignore, Assert.Ignore) are
-  # also NotExecuted but have NO ErrorInfo — those should NOT be retried.
+  # Also collect NotExecuted tests, but ONLY real hook/setup failures.
+  # Some intentional deployed-safety skips are emitted as NotExecuted with
+  # ErrorInfo, so filter those out before building the retry list.
   $notExecNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='NotExecuted']", $ns)
+  $intentionalNotExecutedSkips = @($notExecNodes | Where-Object {
+    Test-IntentionalNotExecutedSkip -Node $_ -Ns $ns
+  })
   $hookFailures = @($notExecNodes | Where-Object {
-    $_.SelectSingleNode('trx:Output/trx:ErrorInfo', $ns) -ne $null
+    $hasErrorInfo = $_.SelectSingleNode('trx:Output/trx:ErrorInfo', $ns) -ne $null
+    $hasErrorInfo -and -not (Test-IntentionalNotExecutedSkip -Node $_ -Ns $ns)
   })
   $skippedCount = $notExecNodes.Count - $hookFailures.Count
   if ($skippedCount -gt 0) {
     Write-Host ("   ℹ️ {0} intentionally-skipped test(s) will not be retried" -f $skippedCount)
+  }
+  if ($intentionalNotExecutedSkips.Count -gt 0) {
+    Write-Host ("   ℹ️ {0} deployed-safety skipped test(s) were ignored by retry selection" -f $intentionalNotExecutedSkips.Count)
   }
 
   $failed = New-Object System.Collections.Generic.List[string]
