@@ -14,17 +14,102 @@ inputs:
     description: Run deployed real-auth smoke (B2C popup login + /api/ping)
     required: false
     default: 'false'
+  browser-install-timeout-seconds:
+    description: Maximum seconds to spend installing the Playwright Chromium browser
+    required: false
+    default: '300'
+  system-deps-timeout-seconds:
+    description: Maximum seconds to spend installing Linux packages required by Playwright
+    required: false
+    default: '600'
 runs:
   using: composite
   steps:
-    - name: Install and run Playwright
+    - name: Install web dependencies
+      shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
+      run: |
+        npm ci --ignore-scripts || npm i --ignore-scripts
+
+    - name: Install Playwright Chromium
+      shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
+      env:
+        BROWSER_INSTALL_TIMEOUT_SECONDS: ${{ inputs.browser-install-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        case "$BROWSER_INSTALL_TIMEOUT_SECONDS" in
+          ''|*[!0-9]*) BROWSER_INSTALL_TIMEOUT_SECONDS=300 ;;
+        esac
+        echo "Installing Playwright Chromium browser (timeout ${BROWSER_INSTALL_TIMEOUT_SECONDS}s)..."
+        set +e
+        timeout "${BROWSER_INSTALL_TIMEOUT_SECONDS}s" npx playwright install chromium
+        exit_code=$?
+        set -e
+        if [ "$exit_code" -eq 124 ]; then
+          echo "::error::Playwright Chromium install timed out after ${BROWSER_INSTALL_TIMEOUT_SECONDS}s."
+          exit 124
+        fi
+        if [ "$exit_code" -ne 0 ]; then
+          echo "::error::Playwright Chromium install failed with exit code ${exit_code}."
+          exit "$exit_code"
+        fi
+
+    - name: Ensure Playwright system dependencies
+      shell: bash
+      working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
+      env:
+        SYSTEM_DEPS_TIMEOUT_SECONDS: ${{ inputs.system-deps-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        case "$SYSTEM_DEPS_TIMEOUT_SECONDS" in
+          ''|*[!0-9]*) SYSTEM_DEPS_TIMEOUT_SECONDS=600 ;;
+        esac
+
+        probe='
+          let chromium;
+          try { chromium = require("@playwright/test").chromium; }
+          catch { chromium = require("playwright").chromium; }
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            await browser.close();
+          })().catch((error) => {
+            console.error(error && error.message ? error.message : error);
+            process.exit(1);
+          });
+        '
+
+        set +e
+        node -e "$probe"
+        probe_exit=$?
+        set -e
+        if [ "$probe_exit" -eq 0 ]; then
+          echo "Playwright Chromium launch probe passed; Linux dependencies are already available."
+          exit 0
+        fi
+
+        echo "Playwright Chromium launch probe failed; installing Linux dependencies (timeout ${SYSTEM_DEPS_TIMEOUT_SECONDS}s)..."
+        set +e
+        timeout "${SYSTEM_DEPS_TIMEOUT_SECONDS}s" npx playwright install-deps chromium
+        deps_exit=$?
+        set -e
+        if [ "$deps_exit" -eq 124 ]; then
+          echo "::error::Playwright Linux dependency install timed out after ${SYSTEM_DEPS_TIMEOUT_SECONDS}s."
+          exit 124
+        fi
+        if [ "$deps_exit" -ne 0 ]; then
+          echo "::error::Playwright Linux dependency install failed with exit code ${deps_exit}."
+          exit "$deps_exit"
+        fi
+
+        node -e "$probe"
+
+    - name: Run Playwright smoke
       shell: bash
       working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
       env:
         BASE_URL: ${{ inputs.base-url }}
       run: |
-        npm ci --ignore-scripts || npm i --ignore-scripts
-        npx playwright install --with-deps
         # Run smoke tests only (no auth-dependent tests)
         npm run test:e2e:smoke
 
