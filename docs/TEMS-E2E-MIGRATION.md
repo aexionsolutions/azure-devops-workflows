@@ -424,7 +424,7 @@ e2e-deployed:
     azure_keyvault_secret_name: PostgresConnectionString
     
     # Test Configuration  
-    test_filter: '@smoke'
+    test_filter: '@deployed-smoke'
     e2e_retry_attempts: 3
     e2e_enable_video: false
     
@@ -432,8 +432,8 @@ e2e-deployed:
     node_version: '20'
     dotnet_version: '10.0.x'
   secrets:
-    E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
-    E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
+    B2C_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
+    B2C_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
     AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 ```
 
@@ -616,14 +616,14 @@ jobs:
       api_url: https://tems-${{ inputs.environment }}-api.azurewebsites.net
       environment_name: ${{ inputs.environment }}
       azure_keyvault_name: tems-${{ inputs.environment }}-kv
-      test_filter: '@smoke'
+      test_filter: '@deployed-smoke'
       e2e_retry_attempts: 3
     secrets:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      E2E_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
+      B2C_TEST_USER_EMAIL: ${{ secrets[format('{0}_E2E_TEST_USER_EMAIL', inputs.environment)] }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets[format('{0}_E2E_TEST_USER_PASSWORD', inputs.environment)] }}
 ```
 
 ---
@@ -646,12 +646,12 @@ jobs:
 A: No! The reusable workflow checks out your repo at the `git_ref` tag, so it uses the test code from that tag directly.
 
 **Q: What about Playwright installation?**  
-A: The workflow handles `npm ci` and `npx playwright install --with-deps` automatically.
+A: The workflow handles `npm ci`, installs only the needed Playwright browser dependencies, and fails clearly if installation exceeds `playwright_install_timeout_minutes` (default: 15).
 
 **Q: Can I use different test filters per environment?**  
 A: Yes! Use the `test_filter` input:
 - Dev: `@smoke`
-- UAT: `@smoke or @regression`  
+- UAT: `(Category=smoke|Category=regression|TestCategory=smoke|TestCategory=regression)`
 - Prod: `@critical`
 
 **Q: What if I need custom environment variables?**  
