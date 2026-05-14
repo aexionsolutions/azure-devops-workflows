@@ -65,7 +65,7 @@ jobs:
   build-and-package:
     name: Build & Package
     runs-on: windows-latest
-    # Build for workflow_call or workflow_dispatch triggers
+    # Build for workflow_call or workflow_dispatch triggers.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     env:
       PACKAGE: web.zip

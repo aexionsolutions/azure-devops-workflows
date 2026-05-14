@@ -112,7 +112,7 @@ jobs:
       web_directory: web/tems-portal
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
       run_playwright_tests: true
-      test_filter: '@smoke'
+      test_filter: '@deployed-smoke'
     secrets:
       e2e_secrets: ${{ secrets.E2E_SECRETS_JSON }}
       # B2C secrets now passed explicitly
@@ -120,6 +120,8 @@ jobs:
       B2C_SMOKE_CLIENT_ID: ${{ secrets.B2C_SMOKE_CLIENT_ID }}
       AAD_B2C_API_SCOPE: ${{ secrets.AAD_B2C_API_SCOPE }}
       B2C_SMOKE_CLIENT_SECRET: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.DEV_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.DEV_E2E_TEST_USER_PASSWORD }}
 ```
 
 ## Required Repository Secrets
@@ -132,7 +134,29 @@ Ensure these secrets are configured in your repository:
 | `B2C_SMOKE_CLIENT_ID` | Azure B2C client ID for smoke test user | `12345678-1234-1234-1234-123456789abc` |
 | `AAD_B2C_API_SCOPE` | Azure B2C API scope | `https://yourtenantname.onmicrosoft.com/api/access_as_user` |
 | `B2C_SMOKE_CLIENT_SECRET` | Azure B2C client secret | `secret_value_here` |
+| `B2C_TEST_USER_EMAIL` | Test user email for deployed Playwright auth smoke tests | `test.user@example.com` |
+| `B2C_TEST_USER_PASSWORD` | Test user password for deployed Playwright auth smoke tests | `secret_value_here` |
 | `E2E_SECRETS_JSON` | Additional test secrets as JSON | `{"E2E_ADMIN_PASSWORD":"secret123"}` |
+
+## Web Deployment Auth Settings
+
+`deploy-template-web.yml` also configures the deployed web app's runtime B2C settings. Use `secrets.b2c_web_client_id` for the web app client ID so it can differ from the smoke-test client ID used by E2E auth flows:
+
+```yaml
+jobs:
+  web:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/deploy-template-web.yml@main
+    with:
+      environment: dev
+      app-name: tems-dev-web
+      b2c_authority: ${{ vars.AAD_B2C_AUTHORITY }}
+      b2c_scope: ${{ vars.AAD_B2C_API_SCOPE }}
+    secrets:
+      b2c_web_client_id: ${{ secrets.B2C_WEB_CLIENT_ID }}
+      b2c_client_secret: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
+```
+
+When any of `b2c_authority`, `b2c_scope`, or web client ID is supplied, all three are required. The web deploy template writes both server-side and `NEXT_PUBLIC_` App Service settings for production, and for staging when slots are used.
 
 ## What Changed in the Reusable Workflows
 

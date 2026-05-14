@@ -12,6 +12,7 @@ This guide explains how to use the shared workflows in your project.
   - [Web E2E Deployed](#web-e2e-deployed)
 - [Deployment Workflows](#deployment-workflows)
   - [Azure Infrastructure Deploy](#azure-infrastructure-deploy)
+  - [App Service Deployment Templates](#app-service-deployment-templates)
   - [API Deploy](#api-deploy)
   - [Web Deploy](#web-deploy)
 - [Best Practices](#best-practices)
@@ -351,7 +352,7 @@ with:
   # OR
   test_filter: '@regression'      # Only regression tests
   # OR
-  test_filter: '@smoke or @critical'  # Either tag
+  test_filter: '@critical'        # Only critical tests
 ```
 
 ### Common Scenarios
@@ -424,10 +425,10 @@ jobs:
       web_url: https://tems-staging-web.azurewebsites.net
       api_url: https://tems-staging-api.azurewebsites.net
       web_directory: web/tems-portal
-      test_filter: '@smoke'
+      test_filter: '@deployed-smoke'
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
 ```
 
 ### Advanced Usage
@@ -446,9 +447,10 @@ jobs:
       web_directory: web/tems-portal
       
       # Test Configuration
-      test_filter: '@smoke or @regression'
+      test_filter: '(Category=smoke|Category=regression|TestCategory=smoke|TestCategory=regression)'
       run_playwright_tests: true
       playwright_project: 'chromium'           # Specific browser
+      playwright_install_timeout_minutes: 15
       e2e_retry_attempts: 3                    # Higher for deployed envs
       e2e_enable_video: true
       
@@ -464,8 +466,8 @@ jobs:
       api_key: ${{ secrets.STAGING_API_KEY }}
     secrets:
       E2E_AUTH_TOKEN: ${{ secrets.STAGING_AUTH_TOKEN }}
-      E2E_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.STAGING_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.STAGING_E2E_TEST_USER_PASSWORD }}
 ```
 
 ### Key Features
@@ -473,6 +475,8 @@ jobs:
 - ✅ **Tests Deployed Azure Resources** - API + Web + Database already running
 - ✅ **No Docker Services** - Uses your actual cloud infrastructure
 - ✅ **Health Checks** - Verifies services are ready before testing
+- ✅ **Deployed-safe Default Filter** - Reqnroll defaults to `@deployed-smoke`
+- ✅ **Bounded Playwright Install** - Browser and system dependency installs have clear timeouts
 - ✅ **Higher Retry Logic** - Default 3 retries for deployed environment flakiness
 - ✅ **Test Artifact Support** - Works with pre-built test packages
 - ✅ **Post-Deployment Validation** - Runs after deployment completes
@@ -498,6 +502,7 @@ jobs:
 | **Use Case** | PR validation | Post-deployment validation |
 | **Speed** | Slower (builds everything) | Faster (no builds) |
 | **Retry Default** | 1 | 3 |
+| **Reqnroll Default Filter** | `@smoke` when smoke mode is enabled | `@deployed-smoke` |
 | **When to Use** | Before merge | After deployment |
 
 ### Scheduled Production Monitoring
@@ -520,8 +525,8 @@ jobs:
       web_directory: web/tems-portal
       test_filter: '@critical'  # Only critical paths
     secrets:
-      E2E_TEST_USER_EMAIL: ${{ secrets.PROD_E2E_TEST_USER_EMAIL }}
-      E2E_TEST_USER_PASSWORD: ${{ secrets.PROD_E2E_TEST_USER_PASSWORD }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.PROD_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.PROD_E2E_TEST_USER_PASSWORD }}
 ```
 
 ### Documentation
@@ -530,9 +535,51 @@ See [web-e2e-deployed-guide.md](web-e2e-deployed-guide.md) for comprehensive doc
 - Test artifact strategy (packaging tests during release)
 - Health check configuration and custom endpoints
 - Post-deployment validation patterns
+- Deployed-safe `@deployed-smoke` filtering and advanced VSTest filters
+- Bounded Playwright browser/dependency installation
 - Production monitoring with scheduled tests
 - Environment-specific secret management
 - Troubleshooting deployed environment issues
+
+---
+
+## App Service Deployment Templates
+
+Use `deploy-template-web.yml` and `deploy-template-api.yml` during promotion workflows after `web.zip` and `api.zip` have already been built. The web template now applies runtime B2C web auth settings before deployment, verifies the staged web app with Playwright, and relies on the shared App Service deploy action for bounded package deployment and diagnostics.
+
+### Web App Deployment
+
+```yaml
+jobs:
+  web:
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/deploy-template-web.yml@v4
+    with:
+      shared_ref: v4  # Prefer the exact same stable tag used above
+      environment: uat
+      app-name: tems-uat-web
+      resource-group: tems-uat-rg
+      artifact-name: web
+      warmup-url-staging: https://tems-uat-web-staging.azurewebsites.net/healthz
+      warmup-url-prod: https://tems-uat-web.azurewebsites.net/healthz
+      expect-version: ${{ inputs.release_tag }}
+      b2c_authority: ${{ vars.AAD_B2C_AUTHORITY }}
+      b2c_scope: ${{ vars.AAD_B2C_API_SCOPE }}
+      web_directory: web/tems-portal
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      b2c_web_client_id: ${{ secrets.B2C_WEB_CLIENT_ID }}
+      b2c_client_secret: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
+      B2C_TEST_USER_EMAIL: ${{ secrets.UAT_E2E_TEST_USER_EMAIL }}
+      B2C_TEST_USER_PASSWORD: ${{ secrets.UAT_E2E_TEST_USER_PASSWORD }}
+```
+
+When any B2C web auth setting is supplied, the web deploy template requires the authority, scope, and a web client ID. Prefer `secrets.b2c_web_client_id` for the runtime web app client ID; `b2c_client_id` remains a fallback input for callers that have not split smoke-test and web-app client IDs yet.
+
+The template writes both server-side and `NEXT_PUBLIC_` app settings for production, and for staging when slots are used. Redirect URIs are generated as `https://<app>.azurewebsites.net/auth/callback` and `https://<app>-staging.azurewebsites.net/auth/callback`.
+
+If package upload, Kudu/OneDeploy completion, warm-up, or verification fails, the App Service deploy action uploads `appservice-logs-<app-name>` with App Service state, deploy-related app settings, Kudu deployment metadata/logs, and App Service log downloads where available. The package deploy path is bounded by the composite action's 40-minute default timeout.
 
 ---
 
