@@ -138,7 +138,38 @@ on:
         required: false
         type: string
         default: ''
-    
+
+      # Microsoft Graph provisioning (non-sensitive ids; the client secret is
+      # passed via secrets.graph_client_secret). When all of graph_client_id +
+      # secrets.graph_client_secret + b2c_tenant_id are supplied, the API can
+      # mint invited B2C identities (signup approval / user invite) and the E2E
+      # cleanup hook can delete exactly those afterward.
+      graph_client_id:
+        description: 'Client (application) id of the Graph provisioning app registration that mints invited B2C identities.'
+        required: false
+        type: string
+        default: ''
+      api_app_id:
+        description: 'Client id of the API app registration (target service principal for App Role assignment on invited users).'
+        required: false
+        type: string
+        default: ''
+      extension_app_id:
+        description: 'App id owning the B2C custom extension attributes (optional; only needed if invited users carry the role extension attribute).'
+        required: false
+        type: string
+        default: ''
+      b2c_tenant_id:
+        description: 'Directory (tenant) id of the B2C / Entra External ID tenant where identities are provisioned.'
+        required: false
+        type: string
+        default: ''
+      graph_tenant_domain:
+        description: 'Primary domain of the B2C tenant (e.g. yourtenant.onmicrosoft.com), used to build invited user UPNs.'
+        required: false
+        type: string
+        default: ''
+
     secrets:
       E2E_JWT_SIGNING_KEY:
         description: 'JWT signing key for E2E authentication (generated if not provided)'
@@ -149,6 +180,10 @@ on:
       # B2C client secret (sensitive)
       b2c_client_secret:
         description: 'Azure B2C client secret for E2E test user ROPC flow'
+        required: false
+      # Microsoft Graph provisioning client secret (sensitive)
+      graph_client_secret:
+        description: 'Client secret of the Graph provisioning app registration (used by the API to mint invited B2C identities and by the E2E cleanup to delete them).'
         required: false
       # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
       e2e_secrets:
@@ -482,6 +517,47 @@ jobs:
             } >> "$GITHUB_ENV"
             echo "✅ RavenXpress local E2E runtime flags enabled"
           fi
+
+      - name: Configure Graph provisioning environment
+        env:
+          GRAPH_CLIENT_ID: ${{ inputs.graph_client_id }}
+          GRAPH_CLIENT_SECRET: ${{ secrets.graph_client_secret }}
+          GRAPH_API_APP_ID: ${{ inputs.api_app_id }}
+          GRAPH_EXTENSION_APP_ID: ${{ inputs.extension_app_id }}
+          GRAPH_B2C_TENANT_ID: ${{ inputs.b2c_tenant_id }}
+          GRAPH_TENANT_DOMAIN: ${{ inputs.graph_tenant_domain }}
+        run: |
+          # Expose Microsoft Graph provisioning credentials to BOTH the API
+          # (which mints invited B2C identities on signup approval / user invite)
+          # and the E2E test runner (whose B2C cleanup hook resolves and deletes
+          # exactly those identities afterward). Writing to GITHUB_ENV makes them
+          # job-wide, so they survive into every later step — the API process and
+          # the dotnet test process alike.
+          #
+          # The API reads the nested Auth:B2C:* keys (Auth__B2C__* in env form);
+          # the cleanup hook reads the same keys via its config fallback, so this
+          # single export covers provisioning + teardown.
+          if [ -z "$GRAPH_CLIENT_SECRET" ] || [ -z "$GRAPH_CLIENT_ID" ] || [ -z "$GRAPH_B2C_TENANT_ID" ]; then
+            echo "ℹ️  Graph provisioning not configured (need graph_client_id + graph_client_secret + b2c_tenant_id) — invite/approval scenarios will self-skip unless E2E_REQUIRE_GRAPH forces a failure."
+            exit 0
+          fi
+          echo "::add-mask::$GRAPH_CLIENT_SECRET"
+          GRAPH_DELIM="EOF_GRAPH_$(openssl rand -hex 8)"
+          {
+            echo "Auth__B2C__GraphClientId=$GRAPH_CLIENT_ID"
+            echo "Auth__B2C__GraphClientSecret<<${GRAPH_DELIM}"
+            echo "$GRAPH_CLIENT_SECRET"
+            echo "${GRAPH_DELIM}"
+            echo "Auth__B2C__TenantId=$GRAPH_B2C_TENANT_ID"
+            [ -n "$GRAPH_TENANT_DOMAIN" ] && echo "Auth__B2C__GraphTenantDomain=$GRAPH_TENANT_DOMAIN"
+            [ -n "$GRAPH_API_APP_ID" ] && echo "Auth__B2C__ApiAppId=$GRAPH_API_APP_ID"
+            [ -n "$GRAPH_EXTENSION_APP_ID" ] && echo "Auth__B2C__ExtensionAppId=$GRAPH_EXTENSION_APP_ID"
+          } >> "$GITHUB_ENV"
+          # The cleanup hook resolves registered emails -> OIDs against the test
+          # database; the API step sets the connection string in its own scope,
+          # so expose it job-wide here too for the dotnet test process.
+          echo "ConnectionStrings__Postgres=Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${POSTGRES_PASSWORD}" >> "$GITHUB_ENV"
+          echo "✅ Graph provisioning env exported (API provisioning + B2C cleanup)"
 
       - name: Start API server
         env:
