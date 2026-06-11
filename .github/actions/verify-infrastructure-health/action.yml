@@ -119,10 +119,17 @@ runs:
         set -euo pipefail
         echo "🔍 Verifying application database exists..."
         
-        # Check if 'app' database exists
-        if ! az postgres flexible-server db show -g "$RG" --server-name "$PG" --database-name app &>/dev/null; then
+        # Check if 'app' database exists.
+        # Newer Azure CLI renamed --database-name to --name/-n for the
+        # `postgres flexible-server db` commands. GitHub runner images are
+        # mid-rollout, so accept whichever flag the runner's CLI supports —
+        # otherwise `db show` errors out, is misread as "not found", and the
+        # follow-up `db create` hard-fails (flaky per runner image).
+        if ! az postgres flexible-server db show -g "$RG" --server-name "$PG" --database-name app &>/dev/null \
+           && ! az postgres flexible-server db show -g "$RG" --server-name "$PG" --name app &>/dev/null; then
           echo "   ⚠️  Database 'app' not found, creating..."
-          az postgres flexible-server db create -g "$RG" --server-name "$PG" --database-name app --output none
+          az postgres flexible-server db create -g "$RG" --server-name "$PG" --database-name app --output none 2>/dev/null \
+            || az postgres flexible-server db create -g "$RG" --server-name "$PG" --name app --output none
           echo "   ✅ Database 'app' created"
         else
           echo "   ✅ Database 'app' exists"
