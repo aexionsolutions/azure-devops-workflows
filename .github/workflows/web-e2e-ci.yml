@@ -580,12 +580,22 @@ jobs:
           rm -f api-publish/appsettings.*.json
           echo "ℹ️  Removed appsettings files - using environment variables only"
           
-          # Find API entry point (prefer .dll for framework-dependent, fallback to executable)
-          # Look for .dll that has a matching .runtimeconfig.json (indicates it's an executable assembly)
-          API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.runtimeconfig.json" | sed 's/\.runtimeconfig\.json$/.dll/' | head -n1)
-          if [ ! -f "$API_DLL" ]; then
-            # Fallback: try to find *.Api.dll pattern
-            API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.Api.dll" | head -n1)
+          # Find API entry point (prefer .dll for framework-dependent, fallback to executable).
+          # Derive the entry assembly from the api_project name so we never guess wrong when the
+          # publish output also contains a referenced executable that ships its own
+          # *.runtimeconfig.json (e.g. a Worker service referenced by the API — the old
+          # `find ... | head -n1` picked whichever the filesystem returned first, which was
+          # non-deterministic and could start the wrong process). Fall back to the legacy
+          # heuristics for callers whose published assembly name differs from the .csproj name.
+          API_PROJECT_NAME="$(basename "${{ inputs.api_project }}" .csproj)"
+          if [ -f "api-publish/${API_PROJECT_NAME}.dll" ]; then
+            API_DLL="api-publish/${API_PROJECT_NAME}.dll"
+          else
+            # Legacy fallback: first assembly with a matching .runtimeconfig.json, then *.Api.dll.
+            API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.runtimeconfig.json" | sed 's/\.runtimeconfig\.json$/.dll/' | head -n1)
+            if [ ! -f "$API_DLL" ]; then
+              API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.Api.dll" | head -n1)
+            fi
           fi
           API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
           
