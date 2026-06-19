@@ -681,15 +681,19 @@ jobs:
           )
           
           # Add AAD B2C settings if provided (only when AAD secrets are configured)
+          # NOTE: use '__' (double underscore), NOT ':' — App Service on LINUX
+          # injects app settings as environment variables and rejects ':' in
+          # names (Bad Request). .NET reads 'Auth__B2C__Authority' identically to
+          # 'Auth:B2C:Authority'. (Colons only worked on Windows plans.)
           if [ -n "$AAD_CLIENT_ID" ] && [ -n "$AAD_AUTHORITY" ]; then
-            API_SETTINGS+=("Auth:Mode=b2c")
-            API_SETTINGS+=("Auth:ClientId=$AAD_CLIENT_ID")
-            API_SETTINGS+=("Auth:B2C:Authority=$AAD_AUTHORITY")
-            
+            API_SETTINGS+=("Auth__Mode=b2c")
+            API_SETTINGS+=("Auth__ClientId=$AAD_CLIENT_ID")
+            API_SETTINGS+=("Auth__B2C__Authority=$AAD_AUTHORITY")
+
             if [ -n "$AAD_API_SCOPE" ]; then
               # Extract audience from scope (api://GUID/Scope → api://GUID)
               AUDIENCE_URI=$(echo "$AAD_API_SCOPE" | sed 's|^\(api://[^/]*\)/.*|\1|; t; s|^\([^/]*\)/.*|\1|')
-              API_SETTINGS+=("Auth:Audience=$AUDIENCE_URI")
+              API_SETTINGS+=("Auth__Audience=$AUDIENCE_URI")
             fi
           fi
           
