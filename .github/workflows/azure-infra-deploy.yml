@@ -595,19 +595,19 @@ jobs:
         shell: bash
         env:
           KV_NAME: ${{ steps.out.outputs.KV_NAME }}
+          REDIS_NAME: ${{ steps.out.outputs.REDIS_NAME }}
         run: |
           set -e
           echo "Validating connection string secrets created by Bicep..."
 
-          # List of required secrets
+          # Required secrets — must always be present.
           REQUIRED_SECRETS=(
-            "RedisConnectionString"
             "ServiceBusConnectionString"
             "StorageConnectionString"
             "PostgresConnectionString"
           )
 
-          # Verify all secrets exist
+          # Verify all required secrets exist
           for secret in "${REQUIRED_SECRETS[@]}"; do
             if az keyvault secret show --vault-name "$KV_NAME" -n "$secret" --query name -o tsv &>/dev/null; then
               echo "   $secret exists"
@@ -617,6 +617,23 @@ jobs:
               exit 1
             fi
           done
+
+          # Redis is OPTIONAL — an environment may skip the managed cache (e.g. dev,
+          # where the apps fall back to an in-memory cache). The deployment output
+          # REDIS_NAME is the source of truth (empty => Bicep did not provision it).
+          # Do NOT key off the KV secret: an incremental deployRedis=false redeploy
+          # leaves the old RedisConnectionString secret in place, which would
+          # falsely report Redis as present.
+          if [ -n "$REDIS_NAME" ]; then
+            if az keyvault secret show --vault-name "$KV_NAME" -n "RedisConnectionString" --query name -o tsv &>/dev/null; then
+              echo "   RedisConnectionString exists (managed cache provisioned)"
+            else
+              echo "   ERROR: Redis provisioned ($REDIS_NAME) but RedisConnectionString secret missing"
+              exit 1
+            fi
+          else
+            echo "   Redis not provisioned for this environment (optional, OK)"
+          fi
 
           # Validate PostgreSQL connection string format
           PG_CONN=$(az keyvault secret show --vault-name "$KV_NAME" -n "PostgresConnectionString" --query value -o tsv)
@@ -639,6 +656,8 @@ jobs:
         shell: bash
         env:
           KV_URI: ${{ steps.out.outputs.KV_URI }}
+          KV_NAME: ${{ steps.out.outputs.KV_NAME }}
+          REDIS_NAME: ${{ steps.out.outputs.REDIS_NAME }}
           APP_INSIGHTS_CONN: ${{ steps.out.outputs.APP_INSIGHTS_CONN }}
           API_NAME: ${{ steps.out.outputs.API_NAME }}
           WEB_NAME: ${{ steps.out.outputs.WEB_NAME }}
@@ -652,11 +671,11 @@ jobs:
           echo "Configuring App Service settings with Key Vault references..."
           
           # Set API app settings with Key Vault references
+          # Redis is handled separately below (optional — see note).
           API_SETTINGS=(
             "ASPNETCORE_ENVIRONMENT=$ASPNET_ENV"
             "APPLICATIONINSIGHTS_CONNECTION_STRING=$APP_INSIGHTS_CONN"
             "Storage__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/StorageConnectionString)"
-            "Redis__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/RedisConnectionString)"
             "ServiceBus__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/ServiceBusConnectionString)"
             "ConnectionStrings__${{ inputs.postgres_connection_key }}=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/PostgresConnectionString)"
           )
@@ -679,8 +698,30 @@ jobs:
             -n "$API_NAME" \
             --settings "${API_SETTINGS[@]}" \
             --output none
-          
+
           echo " API app settings configured"
+
+          # Redis (OPTIONAL): the deployment output REDIS_NAME is the source of
+          # truth (empty => not provisioned). Wire the Key Vault reference only when
+          # a cache was provisioned; otherwise delete any stale setting so the app
+          # falls back to its in-memory cache instead of dialling a cache that is
+          # about to be / has been deleted. Do NOT key off the KV secret: it can
+          # linger after a deployRedis=false redeploy and would wrongly re-wire it.
+          if [ -n "$REDIS_NAME" ]; then
+            az webapp config appsettings set \
+              -g "${{ inputs.resource_group }}" \
+              -n "$API_NAME" \
+              --settings "Redis__ConnectionString=@Microsoft.KeyVault(SecretUri=${KV_URI}secrets/RedisConnectionString)" \
+              --output none
+            echo " Redis__ConnectionString wired (managed cache present: $REDIS_NAME)"
+          else
+            az webapp config appsettings delete \
+              -g "${{ inputs.resource_group }}" \
+              -n "$API_NAME" \
+              --setting-names "Redis__ConnectionString" \
+              --output none 2>/dev/null || true
+            echo " Redis not provisioned — Redis__ConnectionString left unset (in-memory fallback)"
+          fi
           
           # Set Web app settings
           WEB_SETTINGS="APPLICATIONINSIGHTS_CONNECTION_STRING=$APP_INSIGHTS_CONN API_BASE=https://${API_NAME}.azurewebsites.net NEXT_PUBLIC_API_BASE=https://${API_NAME}.azurewebsites.net WEBSITE_NODE_DEFAULT_VERSION=~20"
