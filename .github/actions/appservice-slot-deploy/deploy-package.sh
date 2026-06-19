@@ -6,6 +6,7 @@ APP="${APP:-}"
 SLOT="${SLOT:-}"
 PACKAGE="${PACKAGE:-}"
 DEPLOY_TIMEOUT_MINUTES="${DEPLOY_TIMEOUT_MINUTES:-10}"
+SCM_SETTLE_SECONDS="${SCM_SETTLE_SECONDS:-45}"
 
 if [ -z "$RG" ] || [ -z "$APP" ] || [ -z "$PACKAGE" ]; then
   echo "Missing RG/APP/PACKAGE environment variables" >&2
@@ -19,6 +20,9 @@ esac
 if [ "$DEPLOY_TIMEOUT_MINUTES" -lt 1 ]; then
   DEPLOY_TIMEOUT_MINUTES=1
 fi
+case "$SCM_SETTLE_SECONDS" in
+  ''|*[!0-9]*) SCM_SETTLE_SECONDS=45 ;;
+esac
 
 if [ ! -f "$PACKAGE" ]; then
   echo "Package not found: $PACKAGE" >&2
@@ -89,6 +93,10 @@ if [ "$deploy_mode" = "zipdeploy" ]; then
       echo "Linux App Service detected; clearing run-from-package so Kudu extracts the zip into wwwroot."
       az webapp config appsettings delete -g "$RG" -n "$APP" "${slot_args[@]}" --setting-names WEBSITE_RUN_FROM_PACKAGE --output none || true
       az webapp config appsettings set -g "$RG" -n "$APP" "${slot_args[@]}" --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false --output none
+      if [ "$SCM_SETTLE_SECONDS" -gt 0 ]; then
+        echo "Waiting ${SCM_SETTLE_SECONDS}s for App Service/SCM configuration changes to settle before zipdeploy."
+        sleep "$SCM_SETTLE_SECONDS"
+      fi
       echo "Posting package to Kudu zipdeploy endpoint for extraction."
       curl -fsS --connect-timeout 30 --max-time "$timeout_seconds" -u "$user:$pass" -X POST "$kudu_base/api/zipdeploy?isAsync=true" \
         --data-binary @"$PACKAGE" \
