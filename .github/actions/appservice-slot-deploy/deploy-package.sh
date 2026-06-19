@@ -44,6 +44,11 @@ package_size_bytes=$(stat -c%s "$PACKAGE" 2>/dev/null || wc -c < "$PACKAGE" | tr
 
 user=$(az webapp deployment list-publishing-credentials -g "$RG" -n "$APP" "${slot_args[@]}" --query publishingUserName -o tsv 2>"_logs/${target}-publishing-user.err" || true)
 pass=$(az webapp deployment list-publishing-credentials -g "$RG" -n "$APP" "${slot_args[@]}" --query publishingPassword -o tsv 2>"_logs/${target}-publishing-password.err" || true)
+linux_fx_version=$(az webapp config show -g "$RG" -n "$APP" "${slot_args[@]}" --query linuxFxVersion -o tsv 2>"_logs/${target}-linuxfx.err" || true)
+deploy_mode="onedeploy"
+if [ -n "$linux_fx_version" ]; then
+  deploy_mode="zipdeploy"
+fi
 
 if [ -n "$user" ] && [ -n "$pass" ]; then
   echo "::add-mask::$user"
@@ -72,19 +77,38 @@ fi
 
 echo "Starting async package deployment for $PACKAGE to $APP ($target)."
 echo "Package size: ${package_size_bytes} bytes. Upload + completion timeout: ${DEPLOY_TIMEOUT_MINUTES}m ..."
+echo "Detected App Service runtime: ${linux_fx_version:-<windows/unknown>}; deploy mode: $deploy_mode."
 deadline=$((SECONDS + timeout_seconds))
 set +e
-timeout "${timeout_seconds}s" az webapp deploy \
-  --resource-group "$RG" \
-  --name "$APP" \
-  "${slot_args[@]}" \
-  --src-path "$PACKAGE" \
-  --type zip \
-  --restart true \
-  --async true \
-  --timeout "$az_timeout_ms" \
-  --output json >"$start_log_file" 2>&1
-status=$?
+if [ "$deploy_mode" = "zipdeploy" ]; then
+  if [ -z "$user" ] || [ -z "$pass" ]; then
+    echo "Linux zipdeploy requires publishing credentials, but none were returned." >"$start_log_file"
+    status=1
+  else
+    {
+      echo "Linux App Service detected; clearing run-from-package so Kudu extracts the zip into wwwroot."
+      az webapp config appsettings delete -g "$RG" -n "$APP" "${slot_args[@]}" --setting-names WEBSITE_RUN_FROM_PACKAGE --output none || true
+      az webapp config appsettings set -g "$RG" -n "$APP" "${slot_args[@]}" --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false --output none
+      echo "Posting package to Kudu zipdeploy endpoint for extraction."
+      curl -fsS --connect-timeout 30 --max-time "$timeout_seconds" -u "$user:$pass" -X POST "$kudu_base/api/zipdeploy?isAsync=true" \
+        --data-binary @"$PACKAGE" \
+        -D "_logs/${target}-zipdeploy-headers.txt"
+    } >"$start_log_file" 2>&1
+    status=$?
+  fi
+else
+  timeout "${timeout_seconds}s" az webapp deploy \
+    --resource-group "$RG" \
+    --name "$APP" \
+    "${slot_args[@]}" \
+    --src-path "$PACKAGE" \
+    --type zip \
+    --restart true \
+    --async true \
+    --timeout "$az_timeout_ms" \
+    --output json >"$start_log_file" 2>&1
+  status=$?
+fi
 set -e
 
 if [ "$status" -eq 124 ]; then
@@ -139,6 +163,10 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 
     if [ "$status_value" = "4" ] || [ "$provisioning_state" = "Succeeded" ]; then
       curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/latest/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
+      if [ "$deploy_mode" = "zipdeploy" ]; then
+        echo "Restarting Linux App Service after extracted zipdeploy so the container reads wwwroot."
+        az webapp restart -g "$RG" -n "$APP" "${slot_args[@]}" --output none || true
+      fi
       echo "Package deployment completed for $APP ($target)."
       exit 0
     fi
