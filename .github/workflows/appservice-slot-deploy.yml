@@ -118,13 +118,13 @@ jobs:
           echo "Resolved shared workflows ref: $REF"
 
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           path: caller
 
       - name: Checkout shared workflows repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aexionsolutions/azure-devops-workflows
           ref: ${{ steps.wfref.outputs.ref }}
@@ -141,7 +141,7 @@ jobs:
 
       - name: Download artifact (if provided)
         if: inputs['artifact-name'] != ''
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs['artifact-name'] }}
           path: _pkg

@@ -131,14 +131,14 @@ jobs:
           echo "Resolved shared workflows ref: $REF"
 
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
 
       - name: Checkout shared workflows repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aexionsolutions/azure-devops-workflows
           ref: ${{ steps.wfref.outputs.ref }}
@@ -146,12 +146,12 @@ jobs:
           path: shared
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -281,7 +281,7 @@ jobs:
       # Upload unit coverage for the coverage-gate job to merge with integration coverage
       - name: Upload unit coverage
         if: always() && inputs.run_integration == true
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: unit-coverage
           path: caller/**/coverage.opencover.xml
@@ -358,7 +358,7 @@ jobs:
 
       - name: Upload web coverage artifact
         if: always() && inputs.run_web_unit_tests == true
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: web-coverage
           path: caller/${{ inputs.web_working_directory }}/coverage/**
@@ -381,7 +381,7 @@ jobs:
           token: ${{ secrets.SONAR_TOKEN }}
 
       - name: Upload CI artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dotnet-ci-artifacts
           path: |
@@ -476,14 +476,14 @@ jobs:
 
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -541,7 +541,7 @@ jobs:
 
       - name: Upload integration coverage
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: integration-coverage
           path: caller/**/coverage.opencover.xml
@@ -550,7 +550,7 @@ jobs:
 
       - name: Upload integration test artifacts
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: integration-test-artifacts
           path: |
@@ -575,25 +575,25 @@ jobs:
           exit 1
 
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.git_ref || github.ref }}
           sparse-checkout: tests
           sparse-checkout-cone-mode: true
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Download unit coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: unit-coverage
           path: coverage/unit
 
       - name: Download integration coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: integration-coverage
           path: coverage/integration
