@@ -84,13 +84,13 @@ jobs:
 
       - name: Checkout repository (no token persisted)
         if: github.event_name != 'pull_request'
-        uses: actions/checkout@v4	
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || '' }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with: { node-version: '20' }
 
       - name: Derive version
@@ -178,7 +178,7 @@ jobs:
 
       - name: Upload web package artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-package
           path: ${{ env.PACKAGE }}
@@ -211,7 +211,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
       - name: Attach web.zip to Release (tag build)
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.export.outputs.version }}
           name: ${{ steps.export.outputs.version }}
@@ -219,7 +219,7 @@ jobs:
 
       - name: Attach web-tests.zip to Release (tag build)
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.export.outputs.version }}
           name: ${{ steps.export.outputs.version }}
@@ -266,7 +266,7 @@ jobs:
       - name: Attach web.zip to Release (manual seed)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.release_tag != '' && steps.mode.outputs.mode == 'seed' && steps.rel.outputs.locked != 'true'
         continue-on-error: true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}
@@ -275,7 +275,7 @@ jobs:
       - name: Attach web-tests.zip to Release (manual seed)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.release_tag != '' && steps.mode.outputs.mode == 'seed' && steps.rel.outputs.locked != 'true'
         continue-on-error: true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}

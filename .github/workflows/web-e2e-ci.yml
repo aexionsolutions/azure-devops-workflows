@@ -217,12 +217,12 @@ jobs:
     name: Build API
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.git_ref || github.ref }}
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -245,7 +245,7 @@ jobs:
             --nologo
 
       - name: Upload API artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-e2e-${{ github.run_id }}
           path: ./api-publish
@@ -303,14 +303,14 @@ jobs:
           echo "Resolved shared workflows ref: $REF"
       
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
 
       - name: Checkout shared workflows repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aexionsolutions/azure-devops-workflows
           ref: ${{ steps.wfref.outputs.ref }}
@@ -318,17 +318,17 @@ jobs:
           path: shared
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node_version }}
 
       - name: Setup .NET (for running API and E2E tests)
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Download API artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: api-e2e-${{ github.run_id }}
           path: caller/api-publish
@@ -954,7 +954,7 @@ jobs:
 
       - name: Upload Playwright artifacts
         if: always() && inputs.run_playwright_tests == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-e2e-${{ github.run_number }}
           path: |
@@ -965,7 +965,7 @@ jobs:
 
       - name: Upload Reqnroll screenshots
         if: always() && inputs.e2e_project != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reqnroll-screenshots-${{ github.run_number }}
           path: |
@@ -976,7 +976,7 @@ jobs:
 
       - name: Upload Reqnroll videos
         if: always() && inputs.e2e_project != '' && inputs.e2e_enable_video == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reqnroll-videos-${{ github.run_number }}
           path: |
@@ -987,7 +987,7 @@ jobs:
 
       - name: Upload Reqnroll test results
         if: always() && inputs.e2e_project != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reqnroll-results-${{ github.run_number }}
           path: |
@@ -1000,7 +1000,7 @@ jobs:
 
       - name: Upload diagnostic logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-diagnostic-logs-${{ github.run_number }}
           path: |

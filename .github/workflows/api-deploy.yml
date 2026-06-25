@@ -136,7 +136,7 @@ jobs:
           echo "Resolved shared workflows ref: $REF"
 
       - name: Checkout caller repo (no token persisted)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || '' }}
@@ -144,7 +144,7 @@ jobs:
           path: caller
 
       - name: Checkout shared workflows repo (no token persisted)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aexionsolutions/azure-devops-workflows
           ref: ${{ steps.wfref.outputs.ref }}
@@ -152,7 +152,7 @@ jobs:
           persist-credentials: false
           path: shared
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with: { dotnet-version: '10.0.x' }
 
       - name: Derive version
@@ -249,7 +249,7 @@ jobs:
 
       - name: Upload API package artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-package
           path: caller/${{ env.PACKAGE }}
@@ -258,7 +258,7 @@ jobs:
 
       - name: Upload test results and coverage
         if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'seed'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-tests-and-coverage
           path: |
@@ -317,7 +317,7 @@ jobs:
       - name: Attach api.zip to Release (manual seed)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.release_tag != '' && steps.mode.outputs.mode == 'seed' && steps.rel.outputs.locked != 'true'
         continue-on-error: true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}
@@ -327,7 +327,7 @@ jobs:
       - name: Attach api-tests.zip to Release (manual seed)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.release_tag != '' && steps.mode.outputs.mode == 'seed' && steps.rel.outputs.locked != 'true'
         continue-on-error: true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}

@@ -261,7 +261,7 @@ jobs:
           echo "Resolved shared workflows ref: $REF"
       
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
@@ -269,7 +269,7 @@ jobs:
       
       # Checkout shared workflows for composite actions (azure-login-smart, dotnet-test-retry)
       - name: Checkout shared workflows repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: aexionsolutions/azure-devops-workflows
           ref: ${{ steps.wfref.outputs.ref }}
@@ -368,14 +368,14 @@ jobs:
       # Setup .NET for Reqnroll tests
       - name: Setup .NET
         if: inputs.e2e_project != ''
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
       
       # Setup Node.js for Playwright tests
       - name: Setup Node.js
         if: inputs.run_playwright_tests && inputs.web_directory != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node_version }}
           cache: 'npm'
@@ -691,7 +691,7 @@ jobs:
       # Upload Playwright artifacts
       - name: Upload Playwright report
         if: always() && inputs.run_playwright_tests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-deployed-e2e-${{ github.run_number }}
           path: |
@@ -701,7 +701,7 @@ jobs:
       
       - name: Upload Playwright screenshots
         if: failure() && inputs.run_playwright_tests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-screenshots-deployed-${{ github.run_number }}
           path: |
@@ -712,7 +712,7 @@ jobs:
       # Upload Reqnroll artifacts
       - name: Upload Reqnroll test results
         if: always() && inputs.e2e_project != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reqnroll-results-deployed-${{ github.run_number }}
           path: TestResults/*.trx
@@ -720,7 +720,7 @@ jobs:
       
       - name: Upload Reqnroll screenshots
         if: failure() && inputs.e2e_project != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reqnroll-screenshots-deployed-${{ github.run_number }}
           path: |
@@ -732,7 +732,7 @@ jobs:
       
       - name: Upload Reqnroll videos
         if: failure() && inputs.e2e_enable_video && inputs.e2e_project != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reqnroll-videos-deployed-${{ github.run_number }}
           path: |
