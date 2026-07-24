@@ -70,6 +70,11 @@ on:
         required: false
         type: string
         default: ''
+      web_base_url:
+        description: 'Optional public HTTPS origin for the production app (for example https://dev.example.com). Used for the MSAL redirect URI; staging slots keep their azurewebsites.net callback.'
+        required: false
+        type: string
+        default: ''
       web_directory:
         description: 'Path to the web project directory with Playwright config (e.g., web/tems-portal, rx-web)'
         required: false
@@ -300,6 +305,7 @@ jobs:
           B2C_WEB_CLIENT_ID: ${{ secrets.b2c_web_client_id }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
+          WEB_BASE_URL: ${{ inputs.web_base_url }}
         run: bash ./shared/.github/scripts/configure-web-auth-settings.sh
 
       - name: Deploy via composite
@@ -594,6 +600,7 @@ jobs:
           B2C_WEB_CLIENT_ID: ${{ secrets.b2c_web_client_id }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
           B2C_SCOPE: ${{ inputs.b2c_scope }}
+          WEB_BASE_URL: ${{ inputs.web_base_url }}
         run: bash ./shared/.github/scripts/configure-web-auth-settings.sh
 
       - name: Swap slots + warmup production
