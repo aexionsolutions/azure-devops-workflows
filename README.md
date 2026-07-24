@@ -130,7 +130,7 @@ permissions:
 
 steps:
   - id: stop_guard
-    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.5
+    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.6
     with:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       target-time: ${{ vars.AUTO_STOP_TIME_DEV || '19:00' }}
