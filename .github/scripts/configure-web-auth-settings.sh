@@ -5,6 +5,7 @@ AUTHORITY="${B2C_AUTHORITY:-}"
 CLIENT_ID="${B2C_WEB_CLIENT_ID:-${B2C_CLIENT_ID:-}}"
 API_SCOPE="${B2C_SCOPE:-}"
 USE_SLOT="${USE_SLOT:-false}"
+PUBLIC_ORIGIN="${WEB_BASE_URL:-}"
 
 if [ -z "$AUTHORITY" ] && [ -z "$CLIENT_ID" ] && [ -z "$API_SCOPE" ]; then
   echo "No B2C web auth settings supplied; leaving existing App Service settings unchanged."
@@ -21,6 +22,13 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
+if [ -n "$PUBLIC_ORIGIN" ]; then
+  if ! printf '%s\n' "$PUBLIC_ORIGIN" | grep -Eq '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$'; then
+    echo "web_base_url must be an HTTPS origin with no path, query, fragment, or credentials." >&2
+    exit 1
+  fi
+fi
+
 set_auth_settings() {
   local slot_arg=()
   local host="$APP.azurewebsites.net"
@@ -32,7 +40,11 @@ set_auth_settings() {
     target="staging"
   fi
 
-  local redirect_uri="https://${host}/auth/callback"
+  local origin="https://${host}"
+  if [ "$target" = "production" ] && [ -n "$PUBLIC_ORIGIN" ]; then
+    origin="$PUBLIC_ORIGIN"
+  fi
+  local redirect_uri="${origin}/auth/callback"
   local settings=(
     "AAD_AUTHORITY=$AUTHORITY"
     "NEXT_PUBLIC_AAD_AUTHORITY=$AUTHORITY"
