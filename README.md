@@ -117,6 +117,33 @@ jobs:
 
 ## 📚 Available Workflows
 
+### Scheduled environment stop guard
+
+Use the shared composite guard before automatically stopping a non-production
+environment. It handles daylight-saving cron overlap with a bounded local-time
+window and skips shutdown while a Start Environment or release promotion is
+queued or running.
+
+```yaml
+permissions:
+  actions: read
+
+steps:
+  - id: stop_guard
+    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.5
+    with:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      target-time: ${{ vars.AUTO_STOP_TIME_DEV || '19:00' }}
+      timezone: ${{ vars.AUTO_STOP_TIMEZONE || 'Europe/London' }}
+
+  - name: Stop dev
+    if: steps.stop_guard.outputs.should-stop == 'true'
+    run: ./stop-dev.sh
+```
+
+The caller job must grant `actions: read`. The default protected workflows are
+`env-start.yml` and `promote-release.yml`.
+
 | Workflow | Purpose | Required Inputs | Status |
 |----------|---------|----------------|--------|
 | [dotnet-ci.yml](.github/workflows/dotnet-ci.yml) | .NET build, test, coverage, SonarCloud | `js_lcov_path`, `sonar_exclusions`, `sonar_coverage_exclusions` | ✅ Ready |
