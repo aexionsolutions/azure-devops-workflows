@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scheduled environment stop guard:** Reusable action prevents automatic
+  shutdown outside a bounded local-time window or while Start Environment or
+  release-promotion workflows are active.
 - **App Service deployment diagnostics:** Package deployment now uses bounded Azure CLI/Kudu polling instead of `azure/webapps-deploy`, with a 40-minute default deploy timeout and `appservice-logs-<app-name>` diagnostics on deploy or warm-up failures.
 - **Web deployment auth settings:** `deploy-template-web.yml` can apply runtime B2C web auth settings before deployment, using `secrets.b2c_web_client_id` as the preferred web app client ID and `b2c_client_id` as a fallback.
 - **Bounded Playwright setup:** Deployed E2E runs now support `playwright_install_timeout_minutes`, install only the browser dependencies needed by the selected browser project, and avoid reinstalling Linux dependencies for Reqnroll when web Playwright already installed them.
