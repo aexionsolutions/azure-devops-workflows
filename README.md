@@ -137,7 +137,7 @@ steps:
       timezone: ${{ vars.AUTO_STOP_TIMEZONE || 'Europe/London' }}
 
   - name: Stop dev
-    if: steps.stop_guard.outputs.should-stop == 'true'
+    if: steps.stop_guard.outputs.should_stop == 'true'
     run: ./stop-dev.sh
 ```
 
