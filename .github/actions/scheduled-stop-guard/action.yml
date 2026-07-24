@@ -22,9 +22,9 @@ inputs:
     default: env-start.yml,promote-release.yml
 
 outputs:
-  should-stop:
+  should_stop:
     description: "'true' only when the current time is in-window and no protected workflow is active."
-    value: ${{ steps.evaluate.outputs.should-stop }}
+    value: ${{ steps.evaluate.outputs.should_stop }}
   reason:
     description: Machine-readable decision reason (eligible, outside-window, or active-workflow).
     value: ${{ steps.evaluate.outputs.reason }}
@@ -98,7 +98,7 @@ runs:
 
           if (!inWindow) {
             core.info(`Skipping scheduled stop: current time is outside the eligible window (elapsed=${elapsedMinutes} minutes).`);
-            core.setOutput('should-stop', 'false');
+            core.setOutput('should_stop', 'false');
             core.setOutput('reason', 'outside-window');
             core.setOutput('active-runs', '');
             return;
@@ -127,13 +127,13 @@ runs:
           if (active.length > 0) {
             const activeRuns = active.join(', ');
             core.warning(`Skipping scheduled stop: protected lifecycle workflow active — ${activeRuns}.`);
-            core.setOutput('should-stop', 'false');
+            core.setOutput('should_stop', 'false');
             core.setOutput('reason', 'active-workflow');
             core.setOutput('active-runs', activeRuns);
             return;
           }
 
           core.info('Scheduled stop is eligible: inside the configured window with no protected lifecycle workflow active.');
-          core.setOutput('should-stop', 'true');
+          core.setOutput('should_stop', 'true');
           core.setOutput('reason', 'eligible');
           core.setOutput('active-runs', '');

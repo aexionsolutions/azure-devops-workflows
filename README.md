@@ -130,14 +130,14 @@ permissions:
 
 steps:
   - id: stop_guard
-    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.5
+    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.6
     with:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       target-time: ${{ vars.AUTO_STOP_TIME_DEV || '19:00' }}
       timezone: ${{ vars.AUTO_STOP_TIMEZONE || 'Europe/London' }}
 
   - name: Stop dev
-    if: steps.stop_guard.outputs.should-stop == 'true'
+    if: steps.stop_guard.outputs.should_stop == 'true'
     run: ./stop-dev.sh
 ```
 
