@@ -14,6 +14,14 @@ inputs:
     description: Run deployed real-auth smoke (B2C popup login + /api/ping)
     required: false
     default: 'false'
+  test-user-email-json-key:
+    description: Optional E2E_SECRETS_JSON key to export as B2C_TEST_USER_EMAIL
+    required: false
+    default: ''
+  test-user-password-json-key:
+    description: Optional E2E_SECRETS_JSON key to export as B2C_TEST_USER_PASSWORD
+    required: false
+    default: ''
   browser-install-timeout-seconds:
     description: Maximum seconds to spend installing the Playwright Chromium browser
     required: false
@@ -25,6 +33,49 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Resolve and mask selected E2E credentials
+      if: ${{ inputs.run-auth-smoke == 'true' }}
+      shell: bash
+      env:
+        EMAIL_KEY: ${{ inputs.test-user-email-json-key }}
+        PASSWORD_KEY: ${{ inputs.test-user-password-json-key }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${E2E_SECRETS_JSON:-}" ] || [ "$E2E_SECRETS_JSON" = "{}" ]; then
+          exit 0
+        fi
+        if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$E2E_SECRETS_JSON"; then
+          echo "::error::E2E_SECRETS_JSON must be a valid JSON object."
+          exit 1
+        fi
+
+        export_masked_value() {
+          local target_name="$1"
+          local json_key="$2"
+          local value
+          local delimiter
+
+          [ -n "$json_key" ] || return 0
+          value=$(jq -r --arg key "$json_key" '.[$key] // empty' <<<"$E2E_SECRETS_JSON")
+          [ -n "$value" ] || return 0
+
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done <<<"$value"
+
+          delimiter="E2E_VALUE_$(date +%s%N)"
+          {
+            printf '%s<<%s\n' "$target_name" "$delimiter"
+            printf '%s\n' "$value"
+            printf '%s\n' "$delimiter"
+          } >>"$GITHUB_ENV"
+          echo "Configured $target_name from E2E_SECRETS_JSON key '$json_key' (value masked)."
+        }
+
+        export_masked_value "B2C_TEST_USER_EMAIL" "$EMAIL_KEY"
+        export_masked_value "B2C_TEST_USER_PASSWORD" "$PASSWORD_KEY"
+
     - name: Install web dependencies
       shell: bash
       working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
