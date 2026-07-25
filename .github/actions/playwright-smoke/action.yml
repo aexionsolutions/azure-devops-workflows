@@ -34,6 +34,7 @@ runs:
   using: composite
   steps:
     - name: Resolve and mask selected E2E credentials
+      id: credentials
       if: ${{ inputs.run-auth-smoke == 'true' }}
       shell: bash
       env:
@@ -42,22 +43,18 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ -z "${E2E_SECRETS_JSON:-}" ] || [ "$E2E_SECRETS_JSON" = "{}" ]; then
-          exit 0
-        fi
-        if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$E2E_SECRETS_JSON"; then
-          echo "::error::E2E_SECRETS_JSON must be a valid JSON object."
-          exit 1
-        fi
-
-        export_masked_value() {
-          local target_name="$1"
-          local json_key="$2"
-          local value
+        resolve_value() {
+          local fallback_value="$1"
+          local target_name="$2"
+          local json_key="$3"
+          local value="$fallback_value"
+          local json_value
           local delimiter
 
-          [ -n "$json_key" ] || return 0
-          value=$(jq -r --arg key "$json_key" '.[$key] // empty' <<<"$E2E_SECRETS_JSON")
+          if [ -n "${E2E_SECRETS_JSON:-}" ] && [ "$E2E_SECRETS_JSON" != "{}" ] && [ -n "$json_key" ]; then
+            json_value=$(jq -r --arg key "$json_key" '.[$key] // empty' <<<"$E2E_SECRETS_JSON")
+            [ -z "$json_value" ] || value="$json_value"
+          fi
           [ -n "$value" ] || return 0
 
           while IFS= read -r line; do
@@ -69,12 +66,21 @@ runs:
             printf '%s<<%s\n' "$target_name" "$delimiter"
             printf '%s\n' "$value"
             printf '%s\n' "$delimiter"
-          } >>"$GITHUB_ENV"
-          echo "Configured $target_name from E2E_SECRETS_JSON key '$json_key' (value masked)."
+          } >>"$GITHUB_OUTPUT"
+          echo "Configured $target_name for the auth smoke (value masked)."
         }
 
-        export_masked_value "B2C_TEST_USER_EMAIL" "$EMAIL_KEY"
-        export_masked_value "B2C_TEST_USER_PASSWORD" "$PASSWORD_KEY"
+        if [ -n "${E2E_SECRETS_JSON:-}" ] && [ "$E2E_SECRETS_JSON" != "{}" ] &&
+           ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$E2E_SECRETS_JSON"; then
+          echo "::error::E2E_SECRETS_JSON must be a valid JSON object."
+          exit 1
+        fi
+
+        # Composite-action caller env has higher precedence than values written
+        # to GITHUB_ENV. Pass the resolved values as explicit step outputs so a
+        # JSON-selected identity cannot be shadowed by a legacy fallback secret.
+        resolve_value "${B2C_TEST_USER_EMAIL:-}" "email" "$EMAIL_KEY"
+        resolve_value "${B2C_TEST_USER_PASSWORD:-}" "password" "$PASSWORD_KEY"
 
     - name: Install web dependencies
       shell: bash
@@ -170,6 +176,8 @@ runs:
       working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
       env:
         BASE_URL: ${{ inputs.base-url }}
+        B2C_TEST_USER_EMAIL: ${{ steps.credentials.outputs.email }}
+        B2C_TEST_USER_PASSWORD: ${{ steps.credentials.outputs.password }}
       run: |
         # Requires B2C_TEST_USER_EMAIL / B2C_TEST_USER_PASSWORD env vars set by the caller.
         npm run test:e2e:deployed-auth-smoke
