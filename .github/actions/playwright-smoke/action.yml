@@ -47,15 +47,32 @@ runs:
           local fallback_value="$1"
           local target_name="$2"
           local json_key="$3"
-          local value="$fallback_value"
-          local json_value
+          local value
+          local match_count
+          local source
           local delimiter
 
-          if [ -n "${E2E_SECRETS_JSON:-}" ] && [ "$E2E_SECRETS_JSON" != "{}" ] && [ -n "$json_key" ]; then
-            json_value=$(jq -r --arg key "$json_key" '.[$key] // empty' <<<"$E2E_SECRETS_JSON")
-            [ -z "$json_value" ] || value="$json_value"
+          if [ -n "$json_key" ]; then
+            match_count=$(jq -r --arg key "$json_key" \
+              '[to_entries[] | select((.key | ascii_downcase) == ($key | ascii_downcase))] | length' \
+              <<<"$E2E_SECRETS_JSON")
+            if [ "$match_count" -ne 1 ]; then
+              echo "::error::E2E_SECRETS_JSON must contain exactly one case-insensitive match for '$json_key' (found $match_count)."
+              exit 1
+            fi
+            value=$(jq -r --arg key "$json_key" \
+              'first(to_entries[] | select((.key | ascii_downcase) == ($key | ascii_downcase))).value // empty' \
+              <<<"$E2E_SECRETS_JSON")
+            source="E2E_SECRETS_JSON key '$json_key'"
+          else
+            value="$fallback_value"
+            source="caller-provided environment"
           fi
-          [ -n "$value" ] || return 0
+
+          if [ -z "$value" ]; then
+            echo "::error::No $target_name credential was resolved from $source."
+            exit 1
+          fi
 
           while IFS= read -r line; do
             [ -n "$line" ] && echo "::add-mask::$line"
@@ -67,18 +84,23 @@ runs:
             printf '%s\n' "$value"
             printf '%s\n' "$delimiter"
           } >>"$GITHUB_OUTPUT"
-          echo "Configured $target_name for the auth smoke (value masked)."
+          echo "Configured $target_name for the auth smoke from $source (value masked)."
         }
 
-        if [ -n "${E2E_SECRETS_JSON:-}" ] && [ "$E2E_SECRETS_JSON" != "{}" ] &&
-           ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$E2E_SECRETS_JSON"; then
-          echo "::error::E2E_SECRETS_JSON must be a valid JSON object."
-          exit 1
+        if [ -n "$EMAIL_KEY" ] || [ -n "$PASSWORD_KEY" ]; then
+          if [ -z "${E2E_SECRETS_JSON:-}" ] || [ "$E2E_SECRETS_JSON" = "{}" ]; then
+            echo "::error::E2E_SECRETS_JSON is required when a JSON credential key is requested."
+            exit 1
+          fi
+          if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$E2E_SECRETS_JSON"; then
+            echo "::error::E2E_SECRETS_JSON must be a valid JSON object."
+            exit 1
+          fi
         fi
 
-        # Composite-action caller env has higher precedence than values written
-        # to GITHUB_ENV. Pass the resolved values as explicit step outputs so a
-        # JSON-selected identity cannot be shadowed by a legacy fallback secret.
+        # An explicitly requested JSON identity is authoritative and fails
+        # closed when absent or ambiguous. It must never downgrade to a legacy
+        # account that may authenticate successfully with different access.
         resolve_value "${B2C_TEST_USER_EMAIL:-}" "email" "$EMAIL_KEY"
         resolve_value "${B2C_TEST_USER_PASSWORD:-}" "password" "$PASSWORD_KEY"
 
