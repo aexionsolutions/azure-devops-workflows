@@ -14,14 +14,6 @@ inputs:
     description: Run deployed real-auth smoke (B2C popup login + /api/ping)
     required: false
     default: 'false'
-  test-user-email-json-key:
-    description: Optional E2E_SECRETS_JSON key to export as B2C_TEST_USER_EMAIL
-    required: false
-    default: ''
-  test-user-password-json-key:
-    description: Optional E2E_SECRETS_JSON key to export as B2C_TEST_USER_PASSWORD
-    required: false
-    default: ''
   browser-install-timeout-seconds:
     description: Maximum seconds to spend installing the Playwright Chromium browser
     required: false
@@ -33,29 +25,22 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Resolve and mask selected E2E credentials
+    - name: Validate and mask selected E2E credentials
       id: credentials
       if: ${{ inputs.run-auth-smoke == 'true' }}
       shell: bash
-      env:
-        EMAIL_KEY: ${{ inputs.test-user-email-json-key }}
-        PASSWORD_KEY: ${{ inputs.test-user-password-json-key }}
       run: |
         set -euo pipefail
 
-        resolve_value() {
-          local fallback_value="$1"
+        emit_credential() {
+          local value="$1"
           local target_name="$2"
-          local json_key="$3"
-          local value="$fallback_value"
-          local json_value
           local delimiter
 
-          if [ -n "${E2E_SECRETS_JSON:-}" ] && [ "$E2E_SECRETS_JSON" != "{}" ] && [ -n "$json_key" ]; then
-            json_value=$(jq -r --arg key "$json_key" '.[$key] // empty' <<<"$E2E_SECRETS_JSON")
-            [ -z "$json_value" ] || value="$json_value"
+          if [ -z "$value" ]; then
+            echo "::error::B2C_TEST_USER_${target_name^^} must be resolved by the caller before running the auth smoke."
+            exit 1
           fi
-          [ -n "$value" ] || return 0
 
           while IFS= read -r line; do
             [ -n "$line" ] && echo "::add-mask::$line"
@@ -67,20 +52,14 @@ runs:
             printf '%s\n' "$value"
             printf '%s\n' "$delimiter"
           } >>"$GITHUB_OUTPUT"
-          echo "Configured $target_name for the auth smoke (value masked)."
+          echo "Configured $target_name for the auth smoke from the caller-provided environment (value masked)."
         }
 
-        if [ -n "${E2E_SECRETS_JSON:-}" ] && [ "$E2E_SECRETS_JSON" != "{}" ] &&
-           ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$E2E_SECRETS_JSON"; then
-          echo "::error::E2E_SECRETS_JSON must be a valid JSON object."
-          exit 1
-        fi
-
-        # Composite-action caller env has higher precedence than values written
-        # to GITHUB_ENV. Pass the resolved values as explicit step outputs so a
-        # JSON-selected identity cannot be shadowed by a legacy fallback secret.
-        resolve_value "${B2C_TEST_USER_EMAIL:-}" "email" "$EMAIL_KEY"
-        resolve_value "${B2C_TEST_USER_PASSWORD:-}" "password" "$PASSWORD_KEY"
+        # Credential selection belongs to the caller. Keeping JSON parsing out
+        # of this action ensures manual verification and promotion use exactly
+        # the same GitHub-expression semantics and cannot select fallback users.
+        emit_credential "${B2C_TEST_USER_EMAIL:-}" "email"
+        emit_credential "${B2C_TEST_USER_PASSWORD:-}" "password"
 
     - name: Install web dependencies
       shell: bash
