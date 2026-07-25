@@ -55,7 +55,7 @@ on:
 
 jobs:
   ci:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/dotnet-ci.yml@v4.8.8
     with:
       solution: Ems.sln
       web_working_directory: web/tems-portal
@@ -89,7 +89,7 @@ on:
 
 jobs:
   build:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-deploy.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-deploy.yml@v4.8.8
     with:
       web_directory: web/tems-portal           # Required: No defaults
       concurrency_group: tems-web-build        # Required: Unique per repo
@@ -106,7 +106,7 @@ on:
 
 jobs:
   build:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/api-deploy.yml@v3.2.0
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/api-deploy.yml@v4.8.8
     with:
       api_project: backend/src/Ems.Api/Ems.Api.csproj
       unit_test_project: tests/Ems.UnitTests/Ems.UnitTests.csproj
@@ -116,6 +116,9 @@ jobs:
 ---
 
 ## 📚 Available Workflows
+
+For branded App Service hostnames, use the
+[platform custom-domain rollout runbook](docs/platform-domain-rollout.md).
 
 ### Scheduled environment stop guard
 
@@ -130,7 +133,7 @@ permissions:
 
 steps:
   - id: stop_guard
-    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.6
+    uses: aexionsolutions/azure-devops-workflows/.github/actions/scheduled-stop-guard@v4.8.8
     with:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       target-time: ${{ vars.AUTO_STOP_TIME_DEV || '19:00' }}
@@ -266,7 +269,7 @@ on:
 jobs:
   # RavenXpress example (uses workflow defaults)
   web-e2e-rx:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.8.8
     with:
       solution: RavenXpress.sln
       api_project: rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj
@@ -280,7 +283,7 @@ jobs:
 
   # TEMS example (use preset for auto-configuration)
   web-e2e-tems:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.8.8
     with:
       solution: Ems.sln
       api_project: backend/Ems.Api/Ems.Api.csproj
@@ -302,7 +305,7 @@ on:
 
 jobs:
   e2e-full:
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-ci.yml@v4.8.8
     with:
       solution: RavenXpress.sln
       api_project: rx-platform/src/RavenXpress.Api/RavenXpress.Api.csproj
@@ -359,7 +362,7 @@ jobs:
   e2e-smoke:
     name: E2E Smoke Tests
     needs: [deploy-api, deploy-web]
-    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.0.1
+    uses: aexionsolutions/azure-devops-workflows/.github/workflows/web-e2e-deployed.yml@v4.8.8
     with:
       git_ref: ${{ github.ref_name }}  # ✅ Use release tag to match deployed code
       e2e_project: tests/Ems.E2E/Ems.E2E.csproj
