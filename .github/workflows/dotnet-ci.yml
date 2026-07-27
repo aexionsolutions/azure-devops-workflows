@@ -155,58 +155,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Detect SonarCloud
-        id: sonar
-        uses: ./shared/.github/actions/sonar-detect
-        with:
-          requested: ${{ inputs.sonar_enabled }}
-          token: ${{ secrets.SONAR_TOKEN }}
-          org: ${{ secrets.SONAR_ORG }}
-          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
-
-      - name: Verify SonarCloud project readiness
-        if: steps.sonar.outputs.enabled == 'true'
-        id: sonar_ready
-        shell: bash
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
-        run: |
-          set -e
-          # Ensure project exists
-          RESP=$(curl -s -u "$SONAR_TOKEN:" "https://sonarcloud.io/api/projects/search?projects=$SONAR_PROJECT_KEY" || echo "")
-          if echo "$RESP" | grep -q '\"components\":\[\]'; then
-            echo "### SonarCloud: Project '$SONAR_PROJECT_KEY' not found." >> "$GITHUB_STEP_SUMMARY"
-            echo "Create the project in your SonarCloud organization, then re-run." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          # Try to detect default branch; if uncertain, do not block
-          BR=$(curl -s -u "$SONAR_TOKEN:" "https://sonarcloud.io/api/project_branches/list?project=$SONAR_PROJECT_KEY" || echo "")
-          if echo "$BR" | jq -e '.branches | map(select(.isMain == true)) | length >= 1' >/dev/null 2>&1; then
-            echo "ready=true" >> $GITHUB_OUTPUT
-          else
-            echo "ready=true" >> $GITHUB_OUTPUT
-            echo "### SonarCloud: Could not confirm default branch via API – proceeding anyway. If analysis fails, verify default branch in Project Settings > Branches." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Install SonarScanner for .NET
-        if: steps.sonar.outputs.enabled == 'true'
-        uses: ./shared/.github/actions/sonar-dotnet-begin
-        with:
-          token: ${{ secrets.SONAR_TOKEN }}
-          org: ${{ secrets.SONAR_ORG }}
-          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
-          branch: ${{ github.ref_name }}
-          pr_key: ${{ inputs.pr_number }}
-          pr_branch: ${{ inputs.pr_head }}
-          pr_base: ${{ inputs.pr_base }}
-          js_lcov: ${{ inputs.js_lcov_path }}
-          sonar_exclusions: ${{ inputs.sonar_exclusions }}
-          sonar_coverage_exclusions: ${{ inputs.sonar_coverage_exclusions }}
-          sonar_infra_exclusions: ${{ inputs.sonar_infra_exclusions }}
-
-      # Sonar begin is handled by the composite above (conditionally)
-
       - name: Restore
         run: dotnet restore ${{ inputs.solution }}
 
@@ -278,13 +226,16 @@ jobs:
             "-assemblyfilters:$ASSEMBLY_FILTERS"
           cat coverage-report/Summary.txt || true
 
-      # Upload unit coverage for the coverage-gate job to merge with integration coverage
+      # Upload unit coverage for the merged coverage gate and the single,
+      # post-test Sonar analysis job.
       - name: Upload unit coverage
-        if: always() && inputs.run_integration == true
+        if: always() && (inputs.run_integration == true || inputs.sonar_enabled == true)
         uses: actions/upload-artifact@v7
         with:
           name: unit-coverage
-          path: caller/**/coverage.opencover.xml
+          path: |
+            caller/**/coverage.opencover.xml
+            caller/**/unit.trx
           if-no-files-found: warn
           retention-days: 1
 
@@ -365,21 +316,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Debug coverage files for Sonar
-        if: steps.sonar.outputs.enabled == 'true'
-        shell: bash
-        run: |
-          shopt -s globstar || true
-          COUNT=$(ls -1 **/coverage.opencover.xml 2>/dev/null | wc -l | tr -d ' ')
-          echo "Found OpenCover files: ${COUNT:-0}"
-          ls -1 **/coverage.opencover.xml 2>/dev/null | head -n 5 || true
-
-      - name: SonarCloud End
-        if: steps.sonar.outputs.enabled == 'true'
-        uses: ./shared/.github/actions/sonar-dotnet-end
-        with:
-          token: ${{ secrets.SONAR_TOKEN }}
-
       - name: Upload CI artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -431,12 +367,14 @@ jobs:
           fi
 
   # ─── Integration Tests (runs in PARALLEL with build-and-unit-tests) ─────────
-  # Separate job so unit tests + SonarCloud run concurrently with integration tests.
+  # Separate job so unit and integration tests run concurrently. SonarCloud runs
+  # once afterward and consumes both jobs' coverage artifacts.
   # Each job builds independently (~1.5 min build cost) to avoid artifact overhead.
   # Net saving: ~7 min wall-clock (unit ~6 min + integration ~7 min sequential → max(6,7) parallel).
   # NOTE for repositories using this reusable workflow:
   #   - Branch protection rules that require specific checks must include
-  #     `build-and-unit-tests`, `integration-tests`, and `coverage-gate`.
+  #     `build-and-unit-tests`, `integration-tests`, `coverage-gate`, and (when
+  #     enabled) `sonar-analysis`.
   #   - `build-and-unit-tests` can pass while `integration-tests` is still running;
   #     rely on the overall workflow status or wait for `coverage-gate`.
   integration-tests:
@@ -544,7 +482,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: integration-coverage
-          path: caller/**/coverage.opencover.xml
+          path: |
+            caller/**/coverage.opencover.xml
+            caller/**/integration.trx
           if-no-files-found: warn
           retention-days: 1
 
@@ -657,3 +597,172 @@ jobs:
             echo "::error::Coverage ${LINE_COV}% is below threshold ${THRESHOLD}%"
             exit 1
           fi
+
+  # ─── SonarCloud Analysis (runs ONCE after coverage producers) ──────────────
+  # Unit/Vitest and integration tests remain parallel. Sonar waits for their
+  # artifacts, then performs one instrumented build and one analysis upload so
+  # new-code coverage includes every coverage-producing test tier.
+  #
+  # Playwright and Reqnroll are functional E2E suites and do not currently emit
+  # source coverage, so they are intentionally outside this aggregation.
+  sonar-analysis:
+    if: >-
+      always()
+      && inputs.sonar_enabled == true
+      && needs.build-and-unit-tests.result == 'success'
+      && (inputs.run_integration != true || needs.integration-tests.result == 'success')
+    needs: [build-and-unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      CALLER_WORKDIR: caller
+
+    defaults:
+      run:
+        working-directory: caller
+
+    steps:
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          INPUT_REF="${{ inputs.shared_ref }}"
+          if [ -n "$INPUT_REF" ]; then
+            REF="$INPUT_REF"
+          else
+            REF="main"
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
+
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Checkout shared workflows repo
+        uses: actions/checkout@v7
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          fetch-depth: 0
+          path: shared
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Detect SonarCloud
+        id: sonar
+        uses: ./shared/.github/actions/sonar-detect
+        with:
+          requested: ${{ inputs.sonar_enabled }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          org: ${{ secrets.SONAR_ORG }}
+          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
+
+      - name: Verify SonarCloud project readiness
+        if: steps.sonar.outputs.enabled == 'true'
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
+        run: |
+          set -e
+          RESP=$(curl -s -u "$SONAR_TOKEN:" "https://sonarcloud.io/api/projects/search?projects=$SONAR_PROJECT_KEY" || echo "")
+          if echo "$RESP" | grep -q '\"components\":\[\]'; then
+            echo "### SonarCloud: Project '$SONAR_PROJECT_KEY' not found." >> "$GITHUB_STEP_SUMMARY"
+            echo "Create the project in your SonarCloud organization, then re-run." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          BR=$(curl -s -u "$SONAR_TOKEN:" "https://sonarcloud.io/api/project_branches/list?project=$SONAR_PROJECT_KEY" || echo "")
+          if ! echo "$BR" | jq -e '.branches | map(select(.isMain == true)) | length >= 1' >/dev/null 2>&1; then
+            echo "### SonarCloud: Could not confirm default branch via API – proceeding anyway. If analysis fails, verify default branch in Project Settings > Branches." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Download unit coverage
+        if: steps.sonar.outputs.enabled == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-coverage
+          path: caller/sonar-coverage/unit
+
+      - name: Download integration coverage
+        if: steps.sonar.outputs.enabled == 'true' && inputs.run_integration == true
+        uses: actions/download-artifact@v8
+        with:
+          name: integration-coverage
+          path: caller/sonar-coverage/integration
+
+      - name: Download web coverage
+        if: steps.sonar.outputs.enabled == 'true' && inputs.run_web_unit_tests == true
+        uses: actions/download-artifact@v8
+        with:
+          name: web-coverage
+          path: caller/${{ inputs.web_working_directory }}/coverage
+
+      - name: SonarCloud Begin
+        if: steps.sonar.outputs.enabled == 'true'
+        uses: ./shared/.github/actions/sonar-dotnet-begin
+        with:
+          token: ${{ secrets.SONAR_TOKEN }}
+          org: ${{ secrets.SONAR_ORG }}
+          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
+          branch: ${{ github.ref_name }}
+          pr_key: ${{ inputs.pr_number }}
+          pr_branch: ${{ inputs.pr_head }}
+          pr_base: ${{ inputs.pr_base }}
+          cobertura_glob: sonar-coverage/**/coverage.opencover.xml
+          js_lcov: ${{ inputs.js_lcov_path }}
+          sonar_exclusions: ${{ inputs.sonar_exclusions }}
+          sonar_coverage_exclusions: ${{ inputs.sonar_coverage_exclusions }}
+          sonar_infra_exclusions: ${{ inputs.sonar_infra_exclusions }}
+
+      - name: Restore for analysis
+        if: steps.sonar.outputs.enabled == 'true'
+        run: dotnet restore ${{ inputs.solution }}
+
+      - name: Build for analysis
+        if: steps.sonar.outputs.enabled == 'true'
+        run: dotnet build ${{ inputs.solution }} -c Release --no-restore
+
+      - name: Verify collected coverage
+        if: steps.sonar.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -e
+          echo "OpenCover reports supplied to Sonar:"
+          find sonar-coverage -name 'coverage.opencover.xml' -print
+          COUNT=$(find sonar-coverage -name 'coverage.opencover.xml' | wc -l | tr -d ' ')
+          if [ "${COUNT:-0}" -lt 1 ]; then
+            echo "::error::No OpenCover report was downloaded for Sonar analysis."
+            exit 1
+          fi
+          if [ "${{ inputs.run_integration }}" = "true" ] && ! find sonar-coverage/integration -name 'coverage.opencover.xml' -print -quit | grep -q .; then
+            echo "::error::Integration tests were enabled, but their OpenCover report is missing."
+            exit 1
+          fi
+          if [ "${{ inputs.run_web_unit_tests }}" = "true" ] && [ ! -f "${{ inputs.js_lcov_path }}" ]; then
+            echo "::error::Web unit tests were enabled, but '${{ inputs.js_lcov_path }}' is missing."
+            exit 1
+          fi
+
+      - name: SonarCloud End
+        if: steps.sonar.outputs.enabled == 'true'
+        uses: ./shared/.github/actions/sonar-dotnet-end
+        with:
+          token: ${{ secrets.SONAR_TOKEN }}
