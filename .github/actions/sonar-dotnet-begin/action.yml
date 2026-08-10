@@ -48,6 +48,10 @@ inputs:
     description: Infrastructure-specific exclusions (optional)
     required: false
     default: ""
+  sonar_scan_all:
+    description: Set sonar.scanner.scanAll for Scanner for .NET. Use false to avoid billing non-.NET files as part of the .NET analysis.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -73,6 +77,7 @@ runs:
         SONAR_EXCLUSIONS: ${{ inputs.sonar_exclusions }}
         SONAR_COVERAGE_EXCLUSIONS: ${{ inputs.sonar_coverage_exclusions }}
         SONAR_INFRA_EXCLUSIONS: ${{ inputs.sonar_infra_exclusions }}
+        SONAR_SCAN_ALL: ${{ inputs.sonar_scan_all }}
       run: |
         set -e
         export PATH="$PATH:$HOME/.dotnet/tools"
@@ -96,8 +101,7 @@ runs:
           "/d:sonar.token=${SONAR_TOKEN}"
           "/d:sonar.cs.opencover.reportsPaths=${COB_GLOB}"
           "/d:sonar.projectBaseDir=${PBDIR}"
-          "/d:sonar.scanner.scanAll=true"
-          "/d:sonar.sources=."
+          "/d:sonar.scanner.scanAll=${SONAR_SCAN_ALL}"
           "/d:sonar.cpd.exclusions=**/Migrations/**/*.cs,**/*.Designer.cs,**/*.generated.cs,**/*ModelSnapshot.cs"
           "/d:sonar.test.inclusions=**/*.Tests/**,**/*Tests.cs,**/*.spec.ts,**/*.test.ts,**/*.spec.tsx,**/*.test.tsx"
           "/d:sonar.cs.vstest.reportsPaths=**/TestResults/**/*.trx"

@@ -66,6 +66,11 @@ on:
         type: string
         description: 'Infrastructure-specific exclusions (e.g., infra/tems-infra/azure/modules/**/*.bicep, docs/tools/**)'
         default: ''
+      sonar_scan_all:
+        required: false
+        type: boolean
+        description: 'Set sonar.scanner.scanAll for Scanner for .NET. Use false to avoid billing non-.NET files as part of the .NET analysis.'
+        default: true
       enforce_coverage:
         required: false
         type: boolean
@@ -731,6 +736,7 @@ jobs:
           sonar_exclusions: ${{ inputs.sonar_exclusions }}
           sonar_coverage_exclusions: ${{ inputs.sonar_coverage_exclusions }}
           sonar_infra_exclusions: ${{ inputs.sonar_infra_exclusions }}
+          sonar_scan_all: ${{ inputs.sonar_scan_all }}
 
       - name: Restore for analysis
         if: steps.sonar.outputs.enabled == 'true'
