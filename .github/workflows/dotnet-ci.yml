@@ -86,11 +86,21 @@ on:
         type: string
         description: 'Path to integration test project (e.g., tests/RavenXpress.IntegrationTests/RavenXpress.IntegrationTests.csproj). Auto-detected if omitted: finds first *IntegrationTest* csproj under tests/.'
         default: ''
+      integration_shards_json:
+        required: false
+        type: string
+        description: 'Optional JSON array of integration-test shards, each with a unique name and a dotnet test filter. Blank runs one unfiltered shard (backward compatible). Example: [{"name":"api","filter":"FullyQualifiedName~MyApp.IntegrationTests.Api"}]'
+        default: ''
       postgres_db:
         required: false
         type: string
         description: 'PostgreSQL database name for integration tests (default: ci_test)'
         default: 'ci_test'
+      integration_postgres_service_enabled:
+        required: false
+        type: boolean
+        description: 'Start the workflow PostgreSQL service for integration tests. Disable when the test fixture owns its own Testcontainers PostgreSQL instance.'
+        default: true
       coverage_assembly_filters:
         required: false
         type: string
@@ -382,11 +392,20 @@ jobs:
   #     enabled) `sonar-analysis`.
   #   - `build-and-unit-tests` can pass while `integration-tests` is still running;
   #     rely on the overall workflow status or wait for `coverage-gate`.
-  integration-tests:
+  integration-test-shards:
+    name: integration-test-shards (${{ matrix.name }})
     if: inputs.run_integration == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
+    strategy:
+      # Let every shard finish so a single failure does not hide failures in
+      # other partitions. The fan-in job below preserves the stable required
+      # `integration-tests` check name for callers and branch protection.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.integration_shards_json || '[{"name":"all","filter":""}]') }}
 
     env:
       CALLER_WORKDIR: caller
@@ -397,7 +416,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15-alpine
+        # An empty image skips the service. This avoids running two PostgreSQL
+        # containers for suites (such as RavenXpress) whose fixture owns one.
+        image: ${{ inputs.integration_postgres_service_enabled && 'postgres:15-alpine' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: test_password_123
@@ -454,42 +475,118 @@ jobs:
       - name: Integration Tests + Coverage (OpenCover)
         env:
           ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
+          INTEGRATION_SHARD_NAME: ${{ matrix.name }}
+          INTEGRATION_TEST_FILTER: ${{ matrix.filter }}
         run: |
-          echo "### Running Integration Tests (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Using Docker PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+
+          echo "### Running Integration Tests: ${INTEGRATION_SHARD_NAME} (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ inputs.integration_postgres_service_enabled }}" = "true" ]; then
+            echo "Using workflow PostgreSQL service (ephemeral, isolated)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Using caller-owned PostgreSQL fixture" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          FILTER_ARGS=()
+          if [ -n "$INTEGRATION_TEST_FILTER" ]; then
+            FILTER_ARGS=(--filter "$INTEGRATION_TEST_FILTER")
+            echo "Filter: \`$INTEGRATION_TEST_FILTER\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Filter: unfiltered" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Discover independently before executing. We later require the TRX
+          # result count to match this number exactly. This turns resource-driven
+          # testhost truncation (for example, 276 of 1,043 tests with exit code 0)
+          # into a loud failure instead of silently losing integration coverage.
+          DISCOVERY_FILE="integration-discovery-${INTEGRATION_SHARD_NAME}.txt"
+          dotnet test ${{ steps.test_projects.outputs.integration }} \
+            -c Release --no-build \
+            --list-tests \
+            "${FILTER_ARGS[@]}" \
+            -v:q | tee "$DISCOVERY_FILE"
+
+          EXPECTED_COUNT=$(awk '
+            /The following Tests are available:/ { listing=1; next }
+            listing && /^    [^[:space:]]/ { count++ }
+            END { print count + 0 }
+          ' "$DISCOVERY_FILE")
+
+          if [ "$EXPECTED_COUNT" -lt 1 ]; then
+            echo "::error::Integration shard '$INTEGRATION_SHARD_NAME' discovered no tests. Check its filter."
+            exit 1
+          fi
+
+          echo "Discovered tests: $EXPECTED_COUNT" >> "$GITHUB_STEP_SUMMARY"
 
           set +e
           dotnet test ${{ steps.test_projects.outputs.integration }} \
             -c Release --no-build \
+            "${FILTER_ARGS[@]}" \
             --collect:"XPlat Code Coverage" \
             --logger "trx;LogFileName=integration.trx" \
             -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
           TEST_EXIT=$?
           set -e
 
-          # The test host can crash during shutdown (e.g. Docker containers torn
-          # down while xUnit cleanup runs), producing exit-code 1 even when every
-          # test passed.  Parse the TRX to decide the real outcome.
+          # Validate the TRX regardless of dotnet's exit code. The test host can
+          # return either zero after truncation or non-zero during clean shutdown;
+          # only a complete result set with zero failed tests may pass.
           TRX=$(find . -name "integration.trx" -type f | head -1)
-          if [ $TEST_EXIT -ne 0 ] && [ -n "$TRX" ]; then
-            FAILED=$(grep -oP 'failed="\K[0-9]+' "$TRX" | head -1)
-            OUTCOME=$(grep -oP 'outcome="\K[^"]+' "$TRX" | head -1)
-            if [ "${FAILED:-1}" = "0" ]; then
-              echo "⚠️ dotnet test exited $TEST_EXIT but TRX shows 0 failures — treating as success (test host crash during shutdown)" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
+          if [ -z "$TRX" ]; then
+            echo "::error::Integration shard '$INTEGRATION_SHARD_NAME' produced no TRX result."
+            exit 1
           fi
 
-          exit $TEST_EXIT
+          read -r ACTUAL_COUNT FAILED_COUNT COUNTER_COUNT < <(
+            python3 -c '
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse(sys.argv[1]).getroot()
+          local_name = lambda element: element.tag.rsplit("}", 1)[-1]
+          results = sum(1 for element in root.iter() if local_name(element) == "UnitTestResult")
+          counters = next((element for element in root.iter() if local_name(element) == "Counters"), None)
+          if counters is None:
+              raise SystemExit("TRX has no Counters element")
+          total = int(counters.attrib.get("total", "-1"))
+          failed = int(counters.attrib.get("failed", "-1"))
+          print(results, failed, total)
+          ' "$TRX"
+          )
+
+          if [ "$ACTUAL_COUNT" -ne "$COUNTER_COUNT" ]; then
+            echo "::error::TRX is internally inconsistent: $ACTUAL_COUNT result elements but Counters total is $COUNTER_COUNT."
+            exit 1
+          fi
+
+          echo "TRX results: $ACTUAL_COUNT (failed: $FAILED_COUNT)" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+            echo "::error::Integration shard '$INTEGRATION_SHARD_NAME' was truncated: discovered $EXPECTED_COUNT tests but received $ACTUAL_COUNT TRX results."
+            exit 1
+          fi
+
+          if [ "$FAILED_COUNT" -ne 0 ]; then
+            echo "::error::Integration shard '$INTEGRATION_SHARD_NAME' has $FAILED_COUNT failed test(s)."
+            exit 1
+          fi
+
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            echo "⚠️ dotnet test exited $TEST_EXIT after all $ACTUAL_COUNT tests produced non-failing results; treating this as a shutdown-only failure." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload integration coverage
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: integration-coverage
+          # Preserve the historical artifact name for unsharded callers. Sharded
+          # callers get collision-free names because every matrix leg uploads.
+          name: ${{ inputs.integration_shards_json != '' && format('integration-coverage-{0}', matrix.name) || 'integration-coverage' }}
           path: |
             caller/**/coverage.opencover.xml
             caller/**/integration.trx
+            caller/**/integration-discovery-*.txt
           if-no-files-found: warn
           retention-days: 1
 
@@ -497,11 +594,31 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: integration-test-artifacts
+          name: ${{ inputs.integration_shards_json != '' && format('integration-test-artifacts-{0}', matrix.name) || 'integration-test-artifacts' }}
           path: |
             **/TestResults/**
           if-no-files-found: warn
           retention-days: 7
+
+  # Stable fan-in check. Callers can add or rebalance shards without changing
+  # the externally required `integration-tests` job/check name.
+  integration-tests:
+    name: integration-tests
+    if: always() && inputs.run_integration == true
+    needs: [integration-test-shards]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify every integration shard passed
+        shell: bash
+        run: |
+          if [ "${{ needs.integration-test-shards.result }}" != "success" ]; then
+            echo "::error::One or more integration-test shards did not pass."
+            exit 1
+          fi
+          echo "All integration-test shards passed." >> "$GITHUB_STEP_SUMMARY"
 
   # ─── Coverage Gate (runs after BOTH test jobs) ──────────────────────────────
   # Merges unit + integration coverage and enforces the threshold.
@@ -540,8 +657,9 @@ jobs:
       - name: Download integration coverage
         uses: actions/download-artifact@v8
         with:
-          name: integration-coverage
+          pattern: integration-coverage*
           path: coverage/integration
+          merge-multiple: false
 
       - name: Merge coverage and check threshold
         shell: bash
@@ -710,8 +828,9 @@ jobs:
         if: steps.sonar.outputs.enabled == 'true' && inputs.run_integration == true
         uses: actions/download-artifact@v8
         with:
-          name: integration-coverage
+          pattern: integration-coverage*
           path: caller/sonar-coverage/integration
+          merge-multiple: false
 
       - name: Download web coverage
         if: steps.sonar.outputs.enabled == 'true' && inputs.run_web_unit_tests == true
