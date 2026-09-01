@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stable release tag selection:** Version detection now excludes reachable
+  prerelease tags and rejects malformed stable tags before calculating a bump,
+  preventing a merged PR from becoming a successful release no-op.
 - **RavenXpress payment-return E2E profile:** `web-e2e-ci.yml` now derives the
   server-owned web callback profile from the resolved local web port when the
   RavenXpress preset is active, while preserving explicit caller overrides.

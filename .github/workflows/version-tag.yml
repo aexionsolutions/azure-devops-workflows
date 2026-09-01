@@ -34,8 +34,13 @@ jobs:
         id: version
         shell: bash
         run: |
-          # Get the last stable version tag (exclude prerelease tags)
-          LAST_TAG=$(git describe --tags --abbrev=0 --match="v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "v1.0.0")
+          # Get the last stable version tag. Git's --match uses glob semantics,
+          # so explicitly exclude prerelease tags before parsing the version.
+          LAST_TAG=$(git describe --tags --abbrev=0 --match="v[0-9]*.[0-9]*.[0-9]*" --exclude="*-*" 2>/dev/null || echo "v1.0.0")
+          if [[ ! "$LAST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Resolved invalid stable version tag: $LAST_TAG"
+            exit 1
+          fi
           echo "Last tag: $LAST_TAG"
           
           # Parse version (remove 'v' prefix)
@@ -190,8 +195,13 @@ jobs:
         id: version
         shell: bash
         run: |
-          # Get the last version tag
-          LAST_TAG=$(git describe --tags --abbrev=0 --match="v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "v1.0.0")
+          # Get the last stable version tag. Git's --match uses glob semantics,
+          # so explicitly exclude prerelease tags before parsing the version.
+          LAST_TAG=$(git describe --tags --abbrev=0 --match="v[0-9]*.[0-9]*.[0-9]*" --exclude="*-*" 2>/dev/null || echo "v1.0.0")
+          if [[ ! "$LAST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Resolved invalid stable version tag: $LAST_TAG"
+            exit 1
+          fi
           echo "Last stable tag: $LAST_TAG"
           
           # Parse version
