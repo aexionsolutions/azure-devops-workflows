@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **App Service deployment diagnostics:** Package deployment now uses bounded Azure CLI/Kudu polling instead of `azure/webapps-deploy`, with a 40-minute default deploy timeout and `appservice-logs-<app-name>` diagnostics on deploy or warm-up failures.
 - **Web deployment auth settings:** `deploy-template-web.yml` can apply runtime B2C web auth settings before deployment, using `secrets.b2c_web_client_id` as the preferred web app client ID and `b2c_client_id` as a fallback.
 - **Bounded Playwright setup:** Deployed E2E runs now support `playwright_install_timeout_minutes`, install only the browser dependencies needed by the selected browser project, and avoid reinstalling Linux dependencies for Reqnroll when web Playwright already installed them.
+- **Server-side Maps E2E configuration:** `web-e2e-ci.yml` accepts the optional `google_maps_platform_server_api_key` secret and enables `GoogleMapsPlatform` only when that credential—or the backwards-compatible `GoogleMapsPlatform__ServerApiKey` entry in `e2e_secrets`—is present.
 
 ### Changed
 
