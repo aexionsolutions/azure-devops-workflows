@@ -319,6 +319,7 @@ jobs:
 |--------|----------|-------------|
 | `E2E_JWT_SIGNING_KEY` | No | JWT signing key (auto-generated if not provided) |
 | `E2E_JWT_AUDIENCE` | No | JWT audience (defaults to `e2e-api`) |
+| `google_maps_platform_server_api_key` | No | Server-restricted Google Maps Platform API key. When present, the API receives `GoogleMapsPlatform__Enabled=true`. If omitted, an existing `GoogleMapsPlatform__ServerApiKey` entry in `e2e_secrets` is retained for backwards compatibility. |
 
 ---
 
@@ -407,6 +408,11 @@ NEXT_PUBLIC_VERSION=e2e-test
 NEXT_PUBLIC_BUILD_SHA=<commit-sha>
 NODE_ENV=production
 ```
+
+When `repo_preset: 'ravenxpress'` is selected, the workflow also registers the
+local web payment return profile as
+`MobilePaymentCallbackProfiles__Web=http://localhost:<web-port>/payments/return`.
+An explicit value supplied through `e2e_env_vars` takes precedence.
 
 ---
 
