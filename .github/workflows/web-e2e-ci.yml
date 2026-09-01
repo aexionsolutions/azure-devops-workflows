@@ -185,6 +185,11 @@ on:
       graph_client_secret:
         description: 'Client secret of the Graph provisioning app registration (used by the API to mint invited B2C identities and by the E2E cleanup to delete them).'
         required: false
+      # Server-only Google Maps Platform credential. Keep this separate from
+      # browser/referrer-restricted Maps keys and scope it to the API process.
+      google_maps_platform_server_api_key:
+        description: 'Server-restricted Google Maps Platform API key. When provided, the API starts with GoogleMapsPlatform enabled.'
+        required: false
       # Generic secret passthrough for test-specific secrets (personas, API keys, etc.)
       e2e_secrets:
         description: 'Additional E2E secrets as JSON string (e.g., {"E2E_ADMIN_USER_EMAIL":"admin@test.com", "E2E_ADMIN_USER_PASSWORD":"secret123"}). These will be masked in logs.'
@@ -573,6 +578,8 @@ jobs:
           Auth__Issuer: ${{ steps.jwt.outputs.issuer }}
           Auth__Audience: ${{ steps.jwt.outputs.audience }}
           AzureStorage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          GoogleMapsPlatform__Enabled: ${{ secrets.google_maps_platform_server_api_key != '' && 'true' || 'false' }}
+          GoogleMapsPlatform__ServerApiKey: ${{ secrets.google_maps_platform_server_api_key }}
         run: |
           echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
           
