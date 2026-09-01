@@ -578,9 +578,26 @@ jobs:
           Auth__Issuer: ${{ steps.jwt.outputs.issuer }}
           Auth__Audience: ${{ steps.jwt.outputs.audience }}
           AzureStorage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-          GoogleMapsPlatform__Enabled: ${{ secrets.google_maps_platform_server_api_key != '' && 'true' || 'false' }}
-          GoogleMapsPlatform__ServerApiKey: ${{ secrets.google_maps_platform_server_api_key }}
+          DEDICATED_GOOGLE_MAPS_SERVER_KEY: ${{ secrets.google_maps_platform_server_api_key }}
         run: |
+          # Prefer the typed reusable-workflow secret without putting it in
+          # GITHUB_ENV. If a caller already supplies the provider setting through
+          # e2e_secrets, retain that backwards-compatible job environment value.
+          if [ -n "$DEDICATED_GOOGLE_MAPS_SERVER_KEY" ]; then
+            echo "::add-mask::$DEDICATED_GOOGLE_MAPS_SERVER_KEY"
+            export GoogleMapsPlatform__Enabled=true
+            export GoogleMapsPlatform__ServerApiKey="$DEDICATED_GOOGLE_MAPS_SERVER_KEY"
+            echo "✅ Google Maps server credential configured from the dedicated secret"
+          elif [ -n "${GoogleMapsPlatform__ServerApiKey:-}" ]; then
+            echo "::add-mask::$GoogleMapsPlatform__ServerApiKey"
+            export GoogleMapsPlatform__Enabled=true
+            echo "✅ Google Maps server credential retained from e2e_secrets"
+          else
+            export GoogleMapsPlatform__Enabled=false
+            unset GoogleMapsPlatform__ServerApiKey
+            echo "ℹ️  Google Maps server credential not configured; provider-backed routes remain disabled"
+          fi
+
           echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
           
           # Remove appsettings files to prevent connection string conflicts

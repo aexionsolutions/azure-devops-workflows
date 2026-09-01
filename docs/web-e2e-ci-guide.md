@@ -319,7 +319,7 @@ jobs:
 |--------|----------|-------------|
 | `E2E_JWT_SIGNING_KEY` | No | JWT signing key (auto-generated if not provided) |
 | `E2E_JWT_AUDIENCE` | No | JWT audience (defaults to `e2e-api`) |
-| `google_maps_platform_server_api_key` | No | Server-restricted Google Maps Platform API key. When present, the API receives `GoogleMapsPlatform__Enabled=true`; the key is scoped to the API startup process. |
+| `google_maps_platform_server_api_key` | No | Server-restricted Google Maps Platform API key. When present, the API receives `GoogleMapsPlatform__Enabled=true`. If omitted, an existing `GoogleMapsPlatform__ServerApiKey` entry in `e2e_secrets` is retained for backwards compatibility. |
 
 ---
 
