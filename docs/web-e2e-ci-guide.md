@@ -409,6 +409,11 @@ NEXT_PUBLIC_BUILD_SHA=<commit-sha>
 NODE_ENV=production
 ```
 
+When `repo_preset: 'ravenxpress'` is selected, the workflow also registers the
+local web payment return profile as
+`MobilePaymentCallbackProfiles__Web=http://localhost:<web-port>/payments/return`.
+An explicit value supplied through `e2e_env_vars` takes precedence.
+
 ---
 
 ## Database Seeding

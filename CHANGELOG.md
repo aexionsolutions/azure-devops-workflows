@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RavenXpress payment-return E2E profile:** `web-e2e-ci.yml` now derives the
+  server-owned web callback profile from the resolved local web port when the
+  RavenXpress preset is active, while preserving explicit caller overrides.
 - **Smart Test Retry:** Intentional deployed-safety `NotExecuted` skips are ignored by retry selection so skipped non-`@deployed-smoke` scenarios do not trigger needless retries.
 
 #### Smart Test Retry: NotExecuted/Inconclusive TRX outcomes now tracked (v4.4.0)

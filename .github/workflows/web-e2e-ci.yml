@@ -520,6 +520,18 @@ jobs:
               echo "NEXT_PUBLIC_RAVENXPRESS_E2E_ENV=local"
               echo "NEXT_PUBLIC_ENABLE_TEST_AUTH_HOOKS=true"
             } >> "$GITHUB_ENV"
+
+            # RavenXpress refuses v1 payment creation unless the requested
+            # client platform has a registered, server-owned return profile.
+            # Match the local runner's default while preserving an explicit
+            # caller override loaded from e2e_env_vars above.
+            if [[ -z "${MobilePaymentCallbackProfiles__Web//[[:space:]]/}" ]]; then
+              echo "MobilePaymentCallbackProfiles__Web=http://localhost:${{ steps.config.outputs.web_port }}/payments/return" >> "$GITHUB_ENV"
+              echo "✅ RavenXpress web payment return profile configured"
+            else
+              echo "ℹ️  RavenXpress web payment return profile supplied by caller"
+            fi
+
             echo "✅ RavenXpress local E2E runtime flags enabled"
           fi
 
