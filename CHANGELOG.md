@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Parallel E2E suites (opt-in):** `web-e2e-ci.yml` accepts `parallel_suites`
+  and `playwright_shards`. With `parallel_suites: true`, Reqnroll and
+  Playwright run as separate parallel jobs (each with its own PostgreSQL,
+  Azurite, API and web) and Playwright can be split across up to eight shards.
+  Defaults keep the single sequential `E2E Tests` job and its artifact names.
+
 - **Scheduled environment stop guard:** Reusable action prevents automatic
   shutdown outside a bounded local-time window or while Start Environment or
   release-promotion workflows are active.
@@ -19,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Faster PR feedback from `dotnet-ci.yml`:** web vitest + coverage now runs in
+  its own `web-unit-tests` job in parallel with `build-and-unit-tests`, which
+  used to run them one after the other. Sonar waits for it and consumes the same
+  `web-coverage` artifact.
+- **Shallow clones where history is unused:** integration-test shards and the
+  full-stack E2E job no longer fetch the caller's full git history (~45 s per
+  shard, ~96 s per E2E job in RavenXpress). `build-and-unit-tests` (PR diff)
+  and Sonar (blame) keep full history.
 - **Deployed Reqnroll default filter:** `web-e2e-deployed.yml` now defaults to `@deployed-smoke`; simple tags map to both `Category` and `TestCategory`, while explicit VSTest filters are passed through unchanged.
 - **Playwright smoke action:** Browser install and system dependency install are split into separate timed steps with launch probing before Linux dependency installation.
 
