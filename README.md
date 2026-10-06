@@ -217,7 +217,7 @@ concurrency_group: ravenxpress-api-build
 |-------|----------|-------------|---------|
 | `solution` | ✅ | Path to .sln file | `Ems.sln` |
 | `web_working_directory` | ❌ | Web tests directory | `web/tems-portal` |
-| `run_web_unit_tests` | ❌ | Enable web tests | `true` |
+| `run_web_unit_tests` | ❌ | Enable web tests. They run with coverage in their own `web-unit-tests` job, in parallel with `build-and-unit-tests` | `true` |
 | `js_lcov_path` | ✅ | Path to lcov.info | `web/tems-portal/coverage/lcov.info` |
 | `sonar_exclusions` | ✅ | File exclusions | See examples above |
 | `sonar_coverage_exclusions` | ✅ | Coverage exclusions | See examples above |
@@ -253,6 +253,8 @@ concurrency_group: ravenxpress-api-build
 | `enable_azurite` | ❌ | Enable Azurite emulator | `true` (default) | - |
 | `seed_data_script` | ❌ | SQL seed file path | `tests/seed-data.sql` | - |
 | `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) | - |
+| `parallel_suites` | ❌ | Run Reqnroll and Playwright as separate parallel jobs, each with its own database, API and web. Off keeps the single `E2E Tests` job | `false` (default) | - |
+| `playwright_shards` | ❌ | With `parallel_suites`, split Playwright across N parallel jobs (`--shard=i/N`), 1-8 | `1` (default) | - |
 | `postgres_db` | ❌ | Database name (override preset) | `e2e_test` | Auto: `Tems_test` |
 | `api_port` | ❌ | API port (override preset) | `5100` | Auto: `5000` |
 | `web_port` | ❌ | Web port (override preset) | `3100` | Auto: `3000` |
