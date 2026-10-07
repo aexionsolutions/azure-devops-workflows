@@ -165,11 +165,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
       - name: Restore
         run: dotnet restore ${{ inputs.solution }}
 
@@ -314,23 +309,6 @@ jobs:
             echo "COVERAGE_PASSED=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-      - name: Web unit tests + coverage (vitest)
-        if: inputs.run_web_unit_tests == true
-        working-directory: caller/${{ inputs.web_working_directory }}
-        run: |
-          rm -f package-lock.json
-          npm install
-          npm run test:ci
-
-      - name: Upload web coverage artifact
-        if: always() && inputs.run_web_unit_tests == true
-        uses: actions/upload-artifact@v7
-        with:
-          name: web-coverage
-          path: caller/${{ inputs.web_working_directory }}/coverage/**
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Upload CI artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -380,6 +358,45 @@ jobs:
             cat coverage-report/Summary.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # ─── Web unit tests (runs in PARALLEL with build-and-unit-tests) ────────────
+  # Vitest needs no .NET build. It used to run after the .NET unit tests in
+  # build-and-unit-tests, adding its whole duration (~11 min in RavenXpress) to
+  # that job. Sonar still consumes the same `web-coverage` artifact.
+  web-unit-tests:
+    name: web-unit-tests
+    if: inputs.run_web_unit_tests == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Web unit tests + coverage (vitest)
+        working-directory: caller/${{ inputs.web_working_directory }}
+        run: |
+          rm -f package-lock.json
+          npm install
+          npm run test:ci
+
+      - name: Upload web coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-coverage
+          path: caller/${{ inputs.web_working_directory }}/coverage/**
+          if-no-files-found: warn
+          retention-days: 7
 
   # ─── Integration Tests (runs in PARALLEL with build-and-unit-tests) ─────────
   # Separate job so unit and integration tests run concurrently. SonarCloud runs
@@ -439,10 +456,11 @@ jobs:
           - 10002:10002
 
     steps:
+      # Shallow: integration shards never read git history, and a full clone
+      # cost ~45 s on every shard.
       - name: Checkout caller repo
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
           path: caller
 
@@ -734,7 +752,8 @@ jobs:
       && inputs.sonar_enabled == true
       && needs.build-and-unit-tests.result == 'success'
       && (inputs.run_integration != true || needs.integration-tests.result == 'success')
-    needs: [build-and-unit-tests, integration-tests]
+      && (inputs.run_web_unit_tests != true || needs.web-unit-tests.result == 'success')
+    needs: [build-and-unit-tests, web-unit-tests, integration-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: read
