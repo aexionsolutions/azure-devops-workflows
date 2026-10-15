@@ -119,7 +119,12 @@ function Merge-TrxResults([string]$baseTrxPath, [int]$totalAttempts) {
     $baseXml = $baseDoc.Xml
     $baseNs  = $baseDoc.Ns
 
-    # Build lookup: testName -> latest UnitTestResult node from retry TRXes
+    # Build lookup: testName -> latest UnitTestResult node from retry TRXes. A later skip never replaces an earlier
+    # failure (Test-ReplacesEarlierResult): a test that failed and was then skipped stays failed, with its evidence.
+    $earlierOutcomes = @{}
+    foreach ($node in $baseXml.SelectNodes('//trx:Results/trx:UnitTestResult', $baseNs)) {
+      $earlierOutcomes[$node.GetAttribute('testName')] = $node.GetAttribute('outcome')
+    }
     $latestResults = @{}
     for ($a = 2; $a -le $totalAttempts; $a++) {
       $retryTrx = Get-TrxPath $a
@@ -129,9 +134,10 @@ function Merge-TrxResults([string]$baseTrxPath, [int]$totalAttempts) {
         $retryNodes = $retryDoc.Xml.SelectNodes('//trx:Results/trx:UnitTestResult', $retryDoc.Ns)
         foreach ($node in $retryNodes) {
           $tn = $node.GetAttribute('testName')
-          if (-not [string]::IsNullOrWhiteSpace($tn)) {
-            $latestResults[$tn] = $node
-          }
+          if ([string]::IsNullOrWhiteSpace($tn)) { continue }
+          if (-not (Test-ReplacesEarlierResult -EarlierOutcome $earlierOutcomes[$tn] -LaterOutcome $node.GetAttribute('outcome'))) { continue }
+          $latestResults[$tn] = $node
+          $earlierOutcomes[$tn] = $node.GetAttribute('outcome')
         }
       }
       catch {
@@ -382,6 +388,31 @@ $failedFirstCount = $failed1.Count
 $lastKnownFailed = $failed1
 Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
 
+# Every test with a failure outcome (Failed, Error, Timeout, Aborted) that has not passed since. Only a later pass
+# resolves a failure: a retry that skips the test (a provider-quota skip included) or exits 0 without running it leaves
+# it failed. The run passes only when this is empty, so a failure can never turn green without the test passing.
+# Skips are retried as before (they may hide a hook failure) but are not failures: an opt-in scenario that skips on
+# every attempt (Assert.Ignore) does not fail the run.
+$unresolved = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($t in @(Get-FailureOutcomeFQNsFromTrx (Get-TrxPath 1))) {
+  if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$unresolved.Add($t) }
+}
+
+function Write-UnresolvedFailure([string]$reason) {
+  # Reports the failures that never passed and exits non-zero (the run is not green).
+  $names = @($unresolved | Sort-Object)
+  Merge-TrxResults (Get-TrxPath 1) $attempt
+  Write-Host ''
+  Write-Host ('❌ {0} test(s) failed and never passed: {1}' -f $names.Count, $reason)
+  $names | ForEach-Object { Write-Host ('   - {0}' -f $_) }
+  'exit-code=1' >> $env:GITHUB_OUTPUT
+  ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
+  ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
+  ('failed-tests-last-count={0}' -f $names.Count) >> $env:GITHUB_OUTPUT
+  ('failed-tests-last={0}' -f [string]::Join($PIPE, $names)) >> $env:GITHUB_OUTPUT
+  exit 1
+}
+
 # Retry attempts: re-run ONLY failures from previous attempt
 while ($attempt -lt $maxAttempts) {
   $attempt++
@@ -401,6 +432,11 @@ while ($attempt -lt $maxAttempts) {
   if ($failedPrev.Count -gt 0) { $lastKnownFailed = $failedPrev }
   
   if ($failedPrev.Count -eq 0) {
+    # Earlier failures that have not passed are still failures, whatever this attempt's exit code says.
+    if ($unresolved.Count -gt 0) {
+      Write-UnresolvedFailure 'their retries did not run them to a pass (for example, a provider quota was exhausted)'
+    }
+
     # TRX exists and shows 0 failures, but dotnet exit code was non-zero
     # This is ONLY valid if tests actually ran - verify with counters
     $counters = Get-TrxCounters $trxPrev
@@ -437,6 +473,18 @@ while ($attempt -lt $maxAttempts) {
   $exitCode = Invoke-DotNetTest $retryFilter $attempt
   Print-AttemptDiagnostics $attempt $exitCode
 
+  # A retried skip that now fails is a failure too; then resolve exactly the failures this attempt ran to a pass.
+  foreach ($t in @(Get-FailureOutcomeFQNsFromTrx (Get-TrxPath $attempt))) {
+    if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$unresolved.Add($t) }
+  }
+  foreach ($t in @(Get-PassedFQNsFromTrx (Get-TrxPath $attempt))) {
+    if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$unresolved.Remove($t) }
+  }
+
+  if ($exitCode -eq 0 -and $unresolved.Count -gt 0) {
+    Write-UnresolvedFailure ('attempt {0} exited 0 without passing them (for example, a provider quota was exhausted)' -f $attempt)
+  }
+
   if ($exitCode -eq 0) {
     Write-Host ('✅ Passed on attempt {0}' -f $attempt)
     Merge-TrxResults (Get-TrxPath 1) $attempt
@@ -448,7 +496,8 @@ while ($attempt -lt $maxAttempts) {
     exit 0
   }
 
-  Start-Sleep -Seconds 5
+  # Pause between attempts (5 s; tests set SMART_RETRY_DELAY_SECONDS=0).
+  Start-Sleep -Seconds ([int]($env:SMART_RETRY_DELAY_SECONDS ?? '5'))
 }
 
 # Exhausted attempts
@@ -461,6 +510,9 @@ if ($lastFailed -eq $null) {
 }
 
 $lastFailed = @($lastFailed)
+# Report every failure that never passed, including any the final attempt only skipped.
+foreach ($t in $lastFailed) { [void]$unresolved.Add($t) }
+if ($unresolved.Count -gt 0) { $lastFailed = @($unresolved | Sort-Object) }
 $lastFailedPipe = [string]::Join($PIPE, $lastFailed)
 
 # Show the TRX summary from the first attempt (full test suite run)
