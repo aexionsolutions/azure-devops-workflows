@@ -116,6 +116,11 @@ on:
         type: string
         description: 'Node.js version for the web unit tests and the Sonar job.'
         default: '20'
+      integration_build_once:
+        required: false
+        type: boolean
+        description: 'Pilot: build the integration test project once (build-integration-tests job) and have every integration shard download it and run the built test assembly, instead of each shard restoring and building the whole solution. The unit-test job still builds for itself, so the critical path does not wait on the upload. Default false keeps per-shard builds.'
+        default: false
       job_timeout_minutes:
         required: false
         type: number
@@ -438,9 +443,87 @@ jobs:
   #     enabled) `sonar-analysis`.
   #   - `build-and-unit-tests` can pass while `integration-tests` is still running;
   #     rely on the overall workflow status or wait for `coverage-gate`.
+  # Pilot (integration_build_once): builds the integration test project once for every shard. Only its output
+  # folder is shared (the test assembly with every dependency copied beside it); shards run that assembly directly.
+  build-integration-tests:
+    name: build-integration-tests
+    if: inputs.run_integration == true && inputs.integration_build_once == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      output_dir: ${{ steps.build.outputs.output_dir }}
+      assembly: ${{ steps.build.outputs.assembly }}
+    defaults:
+      run:
+        working-directory: caller
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build integration test project
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          INTEG="${{ inputs.integration_test_project }}"
+          if [ -z "$INTEG" ]; then
+            INTEG=$(find tests -maxdepth 2 -name '*IntegrationTest*.csproj' -o -name '*Integration.Test*.csproj' 2>/dev/null | head -n1)
+          fi
+          if [ -z "$INTEG" ]; then
+            echo "::error::No integration test project found. Set 'integration_test_project' input or ensure a *IntegrationTest*.csproj exists under tests/."
+            exit 1
+          fi
+          dotnet build "$INTEG" -c Release
+          TARGET_PATH=$(dotnet msbuild "$INTEG" -getProperty:TargetPath -p:Configuration=Release)
+          OUTPUT_DIR=$(realpath --relative-to="$PWD" "$(dirname "$TARGET_PATH")")
+
+          # Run against the project, dotnet test finds the coverage collector in its NuGet package; run against the
+          # assembly (as the shards do), it looks beside the assembly. Copy the referenced collector version there.
+          ASSETS="$(dirname "$INTEG")/obj/project.assets.json"
+          COLLECTOR_VERSION=$(jq -r '.libraries | keys[] | select(startswith("coverlet.collector/")) | split("/")[1]' "$ASSETS" | head -n1)
+          if [ -n "$COLLECTOR_VERSION" ]; then
+            TFM=$(dotnet msbuild "$INTEG" -getProperty:TargetFramework -p:Configuration=Release)
+            PACKAGES=$(dotnet nuget locals global-packages --list | sed 's/^global-packages: //')
+            COLLECTOR_DIR="$PACKAGES/coverlet.collector/$COLLECTOR_VERSION/build/$TFM"
+            [ -d "$COLLECTOR_DIR" ] || COLLECTOR_DIR="$PACKAGES/coverlet.collector/$COLLECTOR_VERSION/build/netstandard2.0"
+            if [ ! -f "$COLLECTOR_DIR/coverlet.collector.dll" ]; then
+              echo "::error::coverlet.collector $COLLECTOR_VERSION has no collector for $TFM under $PACKAGES; shards could not collect coverage."
+              exit 1
+            fi
+            cp -r "$COLLECTOR_DIR/." "$OUTPUT_DIR/"
+            echo "Copied coverlet.collector $COLLECTOR_VERSION ($TFM) beside the test assembly"
+          else
+            echo "::warning::The integration test project does not reference coverlet.collector; shards will collect no coverage."
+          fi
+          echo "output_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+          echo "assembly=$(basename "$TARGET_PATH")" >> "$GITHUB_OUTPUT"
+          echo "Built $INTEG: $OUTPUT_DIR/$(basename "$TARGET_PATH") ($(du -sh "$OUTPUT_DIR" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload integration test build
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: caller/${{ steps.build.outputs.output_dir }}
+          retention-days: 1
+
   integration-test-shards:
     name: integration-test-shards (${{ matrix.name }})
-    if: inputs.run_integration == true
+    # With integration_build_once off the build job is skipped, which must not skip the shards.
+    if: >-
+      !cancelled()
+      && inputs.run_integration == true
+      && (inputs.integration_build_once != true || needs.build-integration-tests.result == 'success')
+    needs: [build-integration-tests]
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     permissions:
@@ -500,10 +583,19 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
+        if: inputs.integration_build_once != true
         run: dotnet restore ${{ inputs.solution }}
 
       - name: Build
+        if: inputs.integration_build_once != true
         run: dotnet build ${{ inputs.solution }} -c Release --no-restore
+
+      - name: Download integration test build
+        if: inputs.integration_build_once == true
+        uses: actions/download-artifact@v8
+        with:
+          name: integration-test-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: caller/${{ needs.build-integration-tests.outputs.output_dir }}
 
       - name: Resolve integration test project
         id: test_projects
@@ -519,6 +611,14 @@ jobs:
           fi
           echo "integration=$INTEG" >> $GITHUB_OUTPUT
           echo "Resolved integration test project: $INTEG"
+          # What dotnet test runs: the shared build's test assembly, or this shard's own build of the project.
+          if [ "${{ inputs.integration_build_once }}" = "true" ]; then
+            echo "target=${{ needs.build-integration-tests.outputs.output_dir }}/${{ needs.build-integration-tests.outputs.assembly }}" >> "$GITHUB_OUTPUT"
+            echo "build_args=" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=$INTEG" >> "$GITHUB_OUTPUT"
+            echo "build_args=-c Release --no-build" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Integration Tests + Coverage (OpenCover)
         env:
@@ -526,8 +626,12 @@ jobs:
           INTEGRATION_SHARD_NAME: ${{ matrix.name }}
           INTEGRATION_TEST_FILTER: ${{ matrix.filter }}
           COVERAGE_EXCLUDE_BY_FILE: ${{ inputs.coverage_exclude_by_file }}
+          TEST_TARGET: ${{ steps.test_projects.outputs.target }}
+          BUILD_ARGS_TEXT: ${{ steps.test_projects.outputs.build_args }}
         run: |
           set -euo pipefail
+          # The test project (built here, so -c Release --no-build) or the shared build's assembly (no build arguments).
+          read -r -a BUILD_ARGS <<< "$BUILD_ARGS_TEXT"
 
           echo "### Running Integration Tests: ${INTEGRATION_SHARD_NAME} (Database + HTTP)" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ inputs.integration_postgres_service_enabled }}" = "true" ]; then
@@ -549,8 +653,8 @@ jobs:
           # testhost truncation (for example, 276 of 1,043 tests with exit code 0)
           # into a loud failure instead of silently losing integration coverage.
           DISCOVERY_FILE="integration-discovery-${INTEGRATION_SHARD_NAME}.txt"
-          dotnet test ${{ steps.test_projects.outputs.integration }} \
-            -c Release --no-build \
+          dotnet test "$TEST_TARGET" \
+            "${BUILD_ARGS[@]}" \
             --list-tests \
             "${FILTER_ARGS[@]}" \
             -v:q | tee "$DISCOVERY_FILE"
@@ -575,8 +679,8 @@ jobs:
           fi
 
           set +e
-          dotnet test ${{ steps.test_projects.outputs.integration }} \
-            -c Release --no-build \
+          dotnet test "$TEST_TARGET" \
+            "${BUILD_ARGS[@]}" \
             "${FILTER_ARGS[@]}" \
             --collect:"XPlat Code Coverage" \
             --logger "trx;LogFileName=integration.trx" \

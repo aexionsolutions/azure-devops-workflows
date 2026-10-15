@@ -228,6 +228,7 @@ concurrency_group: ravenxpress-api-build
 | `coverage_exclude_by_file` | ❌ | Files the coverage collector never instruments (coverlet `ExcludeByFile`, comma-separated globs), in the unit and integration runs | `**/Migrations/*.cs` |
 | `node_version` | ❌ | Node.js version for `web-unit-tests` and Sonar | `'20'` (default) |
 | `job_timeout_minutes` | ❌ | Timeout for each long-running job (build and unit tests, web unit tests, each integration shard, Sonar) | `45` (default) |
+| `integration_build_once` | ❌ | Pilot: build the integration test project once and have every shard run the shared build instead of building the solution itself | `false` (default) |
 
 ### web-ci.yml
 
