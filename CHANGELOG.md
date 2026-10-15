@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Playwright failure limit:** `web-e2e-ci.yml` and `web-e2e-deployed.yml`
+  accept `playwright_max_failures` (default 10; 0 disables), passed as
+  `npx playwright test --max-failures`. The `playwright-smoke` action accepts
+  `max-failures` (default 10) for both smoke scripts. The limit counts tests
+  still failing after their retries (Playwright 1.48+), so with 2 retries a
+  limit of 10 allows about 30 failed runs; tests already running finish. It
+  applies per Playwright job, so per shard. A broken build used to run every
+  test to its timeout on every retry (one RavenXpress run: 47+ minutes against
+  about 9 normally).
+- **Job timeouts:** every job in `dotnet-ci.yml`, `web-ci.yml` and
+  `web-e2e-ci.yml` now has `timeout-minutes` (previously GitHub's 6-hour
+  default). Long-running jobs take `job_timeout_minutes` (default 45 in
+  `dotnet-ci.yml` and `web-e2e-ci.yml`, 30 in `web-ci.yml`); fan-in and
+  planning jobs have fixed short limits.
+- **Coverage file exclusion at collection time:** `dotnet-ci.yml` accepts
+  `coverage_exclude_by_file` (coverlet `ExcludeByFile` globs, e.g.
+  `**/Migrations/*.cs`) for the unit and integration runs. Unlike Sonar's
+  coverage exclusions, excluded files are never instrumented.
+- **Node version for web unit tests:** `dotnet-ci.yml` accepts `node_version`
+  (default `'20'`) for `web-unit-tests` and Sonar, which were hardcoded to 20.
+
 - **Parallel E2E suites (opt-in):** `web-e2e-ci.yml` accepts `parallel_suites`
   and `playwright_shards`. With `parallel_suites: true`, Reqnroll and
   Playwright run as separate parallel jobs (each with its own PostgreSQL,
@@ -25,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`web-ci.yml` no longer installs Playwright browsers:** its test step runs
+  `npm test` (unit tests); browser tests belong to `web-e2e-ci.yml`. The
+  install was skipped in PR runs and wasted minutes in release runs.
 - **Faster PR feedback from `dotnet-ci.yml`:** web vitest + coverage now runs in
   its own `web-unit-tests` job in parallel with `build-and-unit-tests`, which
   used to run them one after the other. Sonar waits for it and consumes the same

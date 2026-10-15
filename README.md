@@ -225,14 +225,18 @@ concurrency_group: ravenxpress-api-build
 | `pr_number` | ❌ | PR number | `${{ github.event.pull_request.number }}` |
 | `pr_head` | ❌ | PR head branch | `${{ github.head_ref }}` |
 | `pr_base` | ❌ | PR base branch | `${{ github.base_ref }}` |
+| `coverage_exclude_by_file` | ❌ | Files the coverage collector never instruments (coverlet `ExcludeByFile`, comma-separated globs), in the unit and integration runs | `**/Migrations/*.cs` |
+| `node_version` | ❌ | Node.js version for `web-unit-tests` and Sonar | `'20'` (default) |
+| `job_timeout_minutes` | ❌ | Timeout for each long-running job (build and unit tests, web unit tests, each integration shard, Sonar) | `45` (default) |
 
 ### web-ci.yml
 
 | Input | Required | Description | Example |
 |-------|----------|-------------|---------|
 | `working_directory` | ❌ | Web project path | `rx-web` |
-| `run_tests` | ❌ | Enable web tests | `true` |
+| `run_tests` | ❌ | Run the unit tests (`npm test`). No browsers are installed | `true` |
 | `node_version` | ❌ | Node.js version | `20` |
+| `job_timeout_minutes` | ❌ | Job timeout | `30` (default) |
 
 ### web-e2e-ci.yml
 
@@ -255,6 +259,8 @@ concurrency_group: ravenxpress-api-build
 | `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) | - |
 | `parallel_suites` | ❌ | Run Reqnroll and Playwright as separate parallel jobs, each with its own database, API and web. Off keeps the single `E2E Tests` job | `false` (default) | - |
 | `playwright_shards` | ❌ | With `parallel_suites`, split Playwright across N parallel jobs (`--shard=i/N`), 1-8 | `1` (default) | - |
+| `playwright_max_failures` | ❌ | Stop Playwright once N tests are still failing after their retries (`--max-failures`; per Playwright job, so per shard; tests already running finish). `0` disables | `10` (default) | - |
+| `job_timeout_minutes` | ❌ | Timeout for each E2E job | `45` (default) | - |
 | `postgres_db` | ❌ | Database name (override preset) | `e2e_test` | Auto: `Tems_test` |
 | `api_port` | ❌ | API port (override preset) | `5100` | Auto: `5000` |
 | `web_port` | ❌ | Web port (override preset) | `3100` | Auto: `3000` |
@@ -336,6 +342,7 @@ jobs:
 | `playwright_project` | ❌ | Playwright project | `chromium`, `firefox` |
 | `e2e_retry_attempts` | ❌ | Retry attempts | `3` (default for deployed) |
 | `playwright_retry_attempts` | ❌ | Playwright retry attempts | `2` (default) |
+| `playwright_max_failures` | ❌ | Stop Playwright once N tests are still failing after their retries (`--max-failures`; tests already running finish). `0` disables | `10` (default) |
 | `playwright_install_timeout_minutes` | ❌ | Maximum time for Playwright browser/system dependency install | `15` (default) |
 | `e2e_enable_video` | ❌ | Capture video recordings | `false` (default) |
 | `health_check_enabled` | ❌ | Health checks before tests | `true` (default) |

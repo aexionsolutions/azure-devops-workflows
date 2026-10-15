@@ -124,6 +124,16 @@ on:
         required: false
         type: number
         default: 1
+      playwright_max_failures:
+        description: 'Stop a Playwright run once this many tests are still failing after their retries (npx playwright test --max-failures). A test counts only when it has no retries left, so with 2 retries a limit of 10 allows about 30 failed runs, and tests already running finish. Applies per Playwright job, so per shard. 0 disables the limit. A broken build otherwise runs every test to its timeout on every retry.'
+        required: false
+        type: number
+        default: 10
+      job_timeout_minutes:
+        description: 'Timeout for each E2E job (each leg). Normal legs take about 10 minutes; a hung job otherwise runs for GitHub''s 6-hour default.'
+        required: false
+        type: number
+        default: 45
       
       # Generic E2E environment variables (pass any test-specific env vars as JSON)
       e2e_env_vars:
@@ -231,6 +241,7 @@ jobs:
   build-api:
     name: Build API
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -272,6 +283,7 @@ jobs:
   plan-e2e:
     name: Plan E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       legs: ${{ steps.plan.outputs.legs }}
     steps:
@@ -314,6 +326,7 @@ jobs:
   web-e2e:
     name: ${{ matrix.leg == 'all' && 'E2E Tests' || format('E2E Tests ({0})', matrix.leg) }}
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]
     strategy:
       # Let every leg finish so one failing suite does not hide another's failures.
@@ -980,6 +993,7 @@ jobs:
           BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
           START_WEB_SERVER: "false"
           PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+          PLAYWRIGHT_MAX_FAILURES: ${{ inputs.playwright_max_failures }}
           # B2C Configuration (with backwards compatibility for legacy secret names)
           B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
           B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
@@ -988,24 +1002,29 @@ jobs:
           # Additional E2E env vars and secrets loaded in previous steps
         run: |
           echo "🧪 Running Playwright tests..."
-          SHARD_ARGS=()
+          PLAYWRIGHT_ARGS=()
           if [ -n "$PLAYWRIGHT_SHARD" ]; then
-            SHARD_ARGS=(--shard="$PLAYWRIGHT_SHARD")
+            PLAYWRIGHT_ARGS+=(--shard="$PLAYWRIGHT_SHARD")
             echo "ℹ️  Shard $PLAYWRIGHT_SHARD"
           fi
-          
+          # A broken build fails every test, each on every retry, each only after its timeout: stop early instead.
+          if [ "${PLAYWRIGHT_MAX_FAILURES:-0}" -gt 0 ]; then
+            PLAYWRIGHT_ARGS+=(--max-failures="$PLAYWRIGHT_MAX_FAILURES")
+            echo "ℹ️  Stops once $PLAYWRIGHT_MAX_FAILURES tests are still failing after their retries"
+          fi
+
           if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
             echo "ℹ️  Running smoke tests only..."
             if [ -n "${{ inputs.playwright_smoke_config }}" ]; then
               echo "   Config: ${{ inputs.playwright_smoke_config }}"
-              npx playwright test --config=${{ inputs.playwright_smoke_config }} --reporter=list "${SHARD_ARGS[@]}"
+              npx playwright test --config=${{ inputs.playwright_smoke_config }} --reporter=list "${PLAYWRIGHT_ARGS[@]}"
             else
               echo "⚠️  No playwright_smoke_config provided, running tests with @smoke tag..."
-              npx playwright test --grep @smoke --reporter=list "${SHARD_ARGS[@]}"
+              npx playwright test --grep @smoke --reporter=list "${PLAYWRIGHT_ARGS[@]}"
             fi
           else
             echo "ℹ️  Running all Playwright tests..."
-            npx playwright test --reporter=list "${SHARD_ARGS[@]}"
+            npx playwright test --reporter=list "${PLAYWRIGHT_ARGS[@]}"
           fi
 
       - name: Capture diagnostic logs on failure
