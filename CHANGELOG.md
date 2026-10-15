@@ -77,6 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Check names, artifact names and inputs are unchanged. Reqnroll still installs
   Microsoft.Playwright's browsers; only the JavaScript Playwright suite's steps
   left its job.
+- **Web installs use the committed lockfile:** `web-ci.yml` and
+  `dotnet-ci.yml`'s `web-unit-tests` run `npm ci` when a `package-lock.json`
+  exists, instead of deleting it and running `npm install`. Resolving afresh
+  tested a different dependency tree on every run and broke whenever the
+  registry did: on 2026-10-15 every RavenXpress run failed in 20 seconds with
+  `Cannot read properties of null (reading 'edgesOut')`, reproduced in a clean
+  `node:20` container from `package.json` alone. RavenXpress's lockfile holds
+  the Linux native bindings (rolldown, Next SWC, sharp, Tailwind oxide), so
+  `npm ci` installs and runs Vitest there; the E2E jobs already used it.
 - **`web-ci.yml` no longer installs Playwright browsers:** its test step runs
   `npm test` (unit tests); browser tests belong to `web-e2e-ci.yml`. The
   install was skipped in PR runs and wasted minutes in release runs.
