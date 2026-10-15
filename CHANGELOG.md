@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Integration build-once pilot (opt-in):** `dotnet-ci.yml` accepts
+  `integration_build_once` (default false). A `build-integration-tests` job
+  builds the integration test project once and shares its output folder (with
+  the referenced coverlet collector copied beside the test assembly); each
+  integration shard downloads it and runs `dotnet test` on the assembly instead
+  of restoring and building the whole solution. The unit-test job still builds
+  for itself, so the critical path does not wait for the upload. Discovery
+  count guard, coverage and TRX checks are unchanged. To be measured before any
+  caller turns it on for good.
+
 - **Playwright failure limit:** `web-e2e-ci.yml` and `web-e2e-deployed.yml`
   accept `playwright_max_failures` (default 10; 0 disables), passed as
   `npx playwright test --max-failures`. The `playwright-smoke` action accepts
