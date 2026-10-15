@@ -7,6 +7,8 @@ author: 'DevOps Team'
 # v4.15.1: A failure is unresolved until the test passes; a later skip neither clears it nor replaces it in the merged TRX
 # v4.13.0: Tests skipped for an exhausted provider quota (message starting "[provider-quota]") are not retried or
 #          counted as failures, and are reported separately (provider-quota-skipped-count, warning, job summary)
+# v6.1.0: Opt-in tests skipped by configuration (message starting "[opt-in]") are not retried, and are reported
+#          (opt-in-skipped-count, notice, job summary); "no failures" vs "no TRX" no longer relies on a $null result
 
 inputs:
   project:
@@ -68,6 +70,9 @@ outputs:
   provider-quota-skipped-count:
     description: 'Number of tests that did not run because a provider quota was exhausted (inconclusive with a message starting "[provider-quota]"). Not failures, and no coverage.'
     value: ${{ steps.provider-quota.outputs.provider-quota-skipped-count }}
+  opt-in-skipped-count:
+    description: 'Number of opt-in tests that did not run because their configuration turned them off (skipped with a message starting "[opt-in]"). Not failures, and no coverage.'
+    value: ${{ steps.provider-quota.outputs.opt-in-skipped-count }}
 
 runs:
   using: 'composite'
@@ -89,8 +94,8 @@ runs:
       run: |
         & "${{ github.action_path }}/Invoke-SmartTestRetry.ps1"
 
-    # Whatever the outcome: a provider-quota skip is not a failure, so without this it would pass unnoticed.
-    - name: Report provider-quota skips
+    # Whatever the outcome: provider-quota and opt-in skips are not failures, so without this they would pass unnoticed.
+    - name: Report provider-quota and opt-in skips
       id: provider-quota
       if: always()
       shell: pwsh
