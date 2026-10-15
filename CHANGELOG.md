@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped (for example by an exhausted provider quota) turned the gate green
   without ever passing. RavenXpress #603 did exactly that: a 403 failure, then
   a Paystack quota skip on retry, reported success. The action now tracks every
-  failure until a retry reports it Passed; the run passes only when none
-  remain, and the merge never replaces a failure with a skip, so its evidence
-  stays. Pester tests now run the real script end to end against a fake
+  failure outcome (Failed, Error, Timeout, Aborted) until a retry reports it
+  Passed; the run passes only when none remain, and the merge never replaces a
+  failure with a skip, so its evidence stays. Skips are retried as before but
+  are not failures: an opt-in scenario that `Assert.Ignore`s on every attempt
+  does not fail the run. Pester tests now run the real script end to end against a fake
   `dotnet` (failure → quota skip fails, also when the retry exits non-zero;
   failure → pass passes; a first-attempt quota skip is neither retried nor
   failed); on the v4.15.0 script the first of these fails.

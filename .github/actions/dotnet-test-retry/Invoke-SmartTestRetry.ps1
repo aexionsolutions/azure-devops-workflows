@@ -388,11 +388,15 @@ $failedFirstCount = $failed1.Count
 $lastKnownFailed = $failed1
 Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
 
-# Every test that has failed and not passed since. Only a later pass resolves a failure: a retry that skips the test
-# (a provider-quota skip included) or exits 0 without running it leaves it failed. The run passes only when this is
-# empty, so a failure can never turn green without the test passing.
+# Every test with a failure outcome (Failed, Error, Timeout, Aborted) that has not passed since. Only a later pass
+# resolves a failure: a retry that skips the test (a provider-quota skip included) or exits 0 without running it leaves
+# it failed. The run passes only when this is empty, so a failure can never turn green without the test passing.
+# Skips are retried as before (they may hide a hook failure) but are not failures: an opt-in scenario that skips on
+# every attempt (Assert.Ignore) does not fail the run.
 $unresolved = New-Object 'System.Collections.Generic.HashSet[string]'
-foreach ($t in $failed1) { [void]$unresolved.Add($t) }
+foreach ($t in @(Get-FailureOutcomeFQNsFromTrx (Get-TrxPath 1))) {
+  if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$unresolved.Add($t) }
+}
 
 function Write-UnresolvedFailure([string]$reason) {
   # Reports the failures that never passed and exits non-zero (the run is not green).
@@ -469,7 +473,10 @@ while ($attempt -lt $maxAttempts) {
   $exitCode = Invoke-DotNetTest $retryFilter $attempt
   Print-AttemptDiagnostics $attempt $exitCode
 
-  # Resolve exactly the failures this attempt ran to a pass.
+  # A retried skip that now fails is a failure too; then resolve exactly the failures this attempt ran to a pass.
+  foreach ($t in @(Get-FailureOutcomeFQNsFromTrx (Get-TrxPath $attempt))) {
+    if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$unresolved.Add($t) }
+  }
   foreach ($t in @(Get-PassedFQNsFromTrx (Get-TrxPath $attempt))) {
     if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$unresolved.Remove($t) }
   }

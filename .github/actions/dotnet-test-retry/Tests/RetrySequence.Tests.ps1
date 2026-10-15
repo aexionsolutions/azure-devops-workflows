@@ -129,6 +129,18 @@ Describe 'Retry sequence (real script, fake dotnet)' -Skip:(-not $IsLinux) {
     Get-MergedOutcome $run 'QuotaSkipped' | Should -Be 'NotExecuted'
   }
 
+  It 'does not fail an opt-in scenario that skips with a message on every attempt (Assert.Ignore is not a failure)' {
+    # RavenXpress: real-B2C and Graph scenarios Assert.Ignore when their configuration is absent. The retry list has
+    # always included such skips; they are retried, skip again, and must not fail the run.
+    $optIn = @{ Name = 'RegistersWithRealB2c'; Outcome = 'NotExecuted'; Message = 'Real B2C browser-auth scenarios are opt-in for local runs.' }
+    $run = Invoke-RetrySequence @(
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Failed'; Message = 'timeout' }, $optIn) },
+      @{ Exit = 0; Results = @(@{ Name = 'Flaky'; Outcome = 'Passed' }, $optIn) })
+
+    $run.Exit | Should -Be 0
+    $run.Outputs['exit-code'] | Should -Be '0'
+  }
+
   It 'fails a test that keeps failing to the last attempt' {
     $failing = @{ Name = 'Broken'; Outcome = 'Failed'; Message = 'Expected 409, got 403' }
     $run = Invoke-RetrySequence @(

@@ -189,6 +189,23 @@ function Get-PassedFQNsFromTrx([string]$trxPath) {
   return (ConvertTo-Fqns -Nodes $nodes -Map (Get-FqnMap -Xml $doc.Xml -Ns $doc.Ns))
 }
 
+# The tests with a failure outcome in an attempt (Failed, Error, Timeout, Aborted); empty when none, $null when the TRX
+# is missing or unreadable. Unlike Get-FailedFQNsFromTrx (the retry list), this excludes every NotExecuted result:
+# skips that carry a message (Assert.Ignore for an opt-in scenario, Assert.Inconclusive) are retried, but a skip is not
+# a failure, so only these outcomes must later pass for the run to pass.
+function Get-FailureOutcomeFQNsFromTrx([string]$trxPath) {
+  if (-not (Test-Path $trxPath)) { return $null }
+  try {
+    $doc = Load-Trx $trxPath
+  }
+  catch {
+    return $null
+  }
+
+  $nodes = $doc.Xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $doc.Ns)
+  return (ConvertTo-Fqns -Nodes $nodes -Map (Get-FqnMap -Xml $doc.Xml -Ns $doc.Ns))
+}
+
 # Whether a retry's result may replace a test's earlier result in the merged TRX. A later result normally does (it is
 # the latest outcome), but a skip never replaces a failure: the failure stands, with its evidence, until the test passes.
 function Test-ReplacesEarlierResult([string]$EarlierOutcome, [string]$LaterOutcome) {
