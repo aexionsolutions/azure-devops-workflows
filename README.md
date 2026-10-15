@@ -239,7 +239,16 @@ concurrency_group: ravenxpress-api-build
 | `node_version` | ❌ | Node.js version | `20` |
 | `job_timeout_minutes` | ❌ | Job timeout | `30` (default) |
 
-### web-e2e-ci.yml
+### web-e2e-ci.yml and web-e2e-parallel-ci.yml
+
+Two entry points to the same full-stack E2E setup (shared as composite actions), with the same inputs:
+
+- **`web-e2e-ci.yml`**: every suite in one `E2E Tests` job, Reqnroll first, then Playwright.
+- **`web-e2e-parallel-ci.yml`**: `E2E Tests (reqnroll)` and one `E2E Tests (playwright…)` job per shard, each with
+  its own database, API and web. Takes `playwright_shards` (1-8).
+
+Each runs only its own jobs, so neither shows the other's jobs as skipped. (Until v5.0.0 one workflow did both, chosen
+with `parallel_suites`; that input is gone: call `web-e2e-parallel-ci.yml` instead of passing `parallel_suites: true`.)
 
 > **⚠️ IMPORTANT:** Use `repo_preset: 'tems'` for TEMS (auto-configures ports 5000/3000, database 'Tems_test'). RavenXpress can omit preset or use `repo_preset: 'ravenxpress'`.
 
@@ -258,8 +267,7 @@ concurrency_group: ravenxpress-api-build
 | `enable_azurite` | ❌ | Enable Azurite emulator | `true` (default) | - |
 | `seed_data_script` | ❌ | SQL seed file path | `tests/seed-data.sql` | - |
 | `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) | - |
-| `parallel_suites` | ❌ | Run Reqnroll and Playwright as separate parallel jobs, each with its own database, API and web. Off keeps the single `E2E Tests` job | `false` (default) | - |
-| `playwright_shards` | ❌ | With `parallel_suites`, split Playwright across N parallel jobs (`--shard=i/N`), 1-8 | `1` (default) | - |
+| `playwright_shards` | ❌ | `web-e2e-parallel-ci.yml` only: split Playwright across N parallel jobs (`--shard=i/N`), 1-8 | `1` (default) | - |
 | `playwright_max_failures` | ❌ | Stop Playwright once N tests are still failing after their retries (`--max-failures`; per Playwright job, so per shard; tests already running finish). `0` disables | `10` (default) | - |
 | `job_timeout_minutes` | ❌ | Timeout for each E2E job | `45` (default) | - |
 | `postgres_db` | ❌ | Database name (override preset) | `e2e_test` | Auto: `Tems_test` |

@@ -1,5 +1,8 @@
 name: Reusable Web E2E CI
 
+# Full-stack E2E (database, API, web) with every suite in one job: Reqnroll, then Playwright. For a separate job per
+# suite and per Playwright shard, call web-e2e-parallel-ci.yml (same inputs, plus playwright_shards).
+
 on:
   workflow_call:
     inputs:
@@ -114,16 +117,6 @@ on:
         required: false
         type: string
         default: ''
-      parallel_suites:
-        description: 'Run Reqnroll and Playwright as separate parallel jobs, each with its own database, API and web, instead of one after the other in a single job. Default false keeps the single "E2E Tests" job.'
-        required: false
-        type: boolean
-        default: false
-      playwright_shards:
-        description: 'With parallel_suites, split Playwright across this many parallel jobs (npx playwright test --shard=i/N). 1-8; ignored without parallel_suites.'
-        required: false
-        type: number
-        default: 1
       playwright_max_failures:
         description: 'Stop a Playwright run once this many tests are still failing after their retries (npx playwright test --max-failures). A test counts only when it has no retries left, so with 2 retries a limit of 10 allows about 30 failed runs, and tests already running finish. Applies per Playwright job, so per shard. 0 disables the limit. A broken build otherwise runs every test to its timeout on every retry.'
         required: false
@@ -277,63 +270,31 @@ jobs:
           path: ./api-publish
           retention-days: 1
 
-  # Decides which E2E jobs run. With parallel_suites off, one "E2E Tests" job runs every suite in sequence (the
-  # historical shape, check name and artifact names). With it on, Reqnroll and each Playwright shard get their own
-  # job, each with its own database, API and web.
+  # Checks the request before the E2E job starts. (Kept as its own job so the "Plan E2E" check callers see is
+  # unchanged; the parallel entry point, web-e2e-parallel-ci.yml, plans its Playwright shards here.)
   plan-e2e:
     name: Plan E2E
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    outputs:
-      mode: ${{ steps.plan.outputs.mode }}
-      run_reqnroll: ${{ steps.plan.outputs.run_reqnroll }}
-      playwright_legs: ${{ steps.plan.outputs.playwright_legs }}
     steps:
-      - name: Plan E2E jobs
-        id: plan
+      - name: Check the E2E request
         shell: bash
         env:
-          PARALLEL: ${{ inputs.parallel_suites }}
-          SHARDS: ${{ inputs.playwright_shards }}
           HAS_REQNROLL: ${{ inputs.e2e_project != '' }}
           HAS_PLAYWRIGHT: ${{ inputs.run_playwright_tests }}
         run: |
           set -euo pipefail
-          if ! [[ "$SHARDS" =~ ^[1-8]$ ]]; then
-            echo "::error::playwright_shards must be between 1 and 8 (got '$SHARDS')."
-            exit 1
+          if [ "$HAS_REQNROLL" != "true" ] && [ "$HAS_PLAYWRIGHT" != "true" ]; then
+            echo "::warning::Neither a Reqnroll project (e2e_project) nor Playwright tests (run_playwright_tests) were requested; the E2E job will only start the stack."
           fi
-          MODE=combined
-          RUN_REQNROLL=false
-          LEGS='[]'
-          if [ "$PARALLEL" = "true" ] && { [ "$HAS_REQNROLL" = "true" ] || [ "$HAS_PLAYWRIGHT" = "true" ]; }; then
-            MODE=parallel
-            RUN_REQNROLL="$HAS_REQNROLL"
-            if [ "$HAS_PLAYWRIGHT" = "true" ]; then
-              for i in $(seq 1 "$SHARDS"); do
-                if [ "$SHARDS" -gt 1 ]; then NAME="playwright-$i-of-$SHARDS"; SHARD="$i/$SHARDS"; else NAME="playwright"; SHARD=""; fi
-                LEGS=$(jq -c --arg n "$NAME" --arg s "$SHARD" '. + [{"leg":$n,"shard":$s,"suffix":("-" + $n)}]' <<< "$LEGS")
-              done
-            fi
-          elif [ "$SHARDS" -gt 1 ]; then
-            echo "::warning::playwright_shards is ignored unless parallel_suites is true."
-          fi
-          {
-            echo "mode=$MODE"
-            echo "run_reqnroll=$RUN_REQNROLL"
-            echo "playwright_legs=$LEGS"
-          } >> "$GITHUB_OUTPUT"
-          echo "E2E mode: $MODE; Reqnroll job: $RUN_REQNROLL; Playwright jobs: $LEGS"
+          echo "E2E Tests runs: Reqnroll=$HAS_REQNROLL, then Playwright=$HAS_PLAYWRIGHT, in one job."
 
-  # The three E2E jobs below share their setup (e2e-start-stack), suite runners (e2e-run-reqnroll,
-  # e2e-run-playwright) and teardown (e2e-stop-stack) as composite actions in this repository, so each job lists
-  # only the steps it runs: no job carries another suite's skipped steps.
-
-  # parallel_suites off: every suite in one job, Reqnroll first, as before. A failing Reqnroll run stops the job
-  # before Playwright, as it always has.
+  # Every suite in one job, Reqnroll first. A failing Reqnroll run stops the job before Playwright, as it always has.
+  # Setup, suite runners and teardown are the composite actions web-e2e-parallel-ci.yml uses too (e2e-start-stack,
+  # e2e-run-reqnroll, e2e-run-playwright, e2e-stop-stack). For a job per suite and per Playwright shard, call
+  # web-e2e-parallel-ci.yml instead.
   e2e-tests:
     name: E2E Tests
-    if: needs.plan-e2e.outputs.mode == 'combined'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]
@@ -484,274 +445,3 @@ jobs:
           web_directory: ${{ inputs.web_directory }}
           enable_video: ${{ inputs.e2e_enable_video }}
 
-  # parallel_suites on: the Reqnroll suite in its own job.
-  e2e-reqnroll:
-    name: E2E Tests (reqnroll)
-    if: needs.plan-e2e.outputs.mode == 'parallel' && needs.plan-e2e.outputs.run_reqnroll == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
-    needs: [build-api, plan-e2e]
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: ${{ inputs.postgres_user }}
-          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
-          POSTGRES_DB: ${{ inputs.postgres_db }}
-        ports:
-          - ${{ inputs.database_port || 5432 }}:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:latest
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
-    steps:
-      - name: Resolve shared workflows ref
-        id: wfref
-        shell: bash
-        env:
-          INPUT_REF: ${{ inputs.shared_ref }}
-        run: |
-          set -euo pipefail
-          REF="${INPUT_REF:-main}"
-          if [ -z "$INPUT_REF" ]; then
-            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
-            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "Resolved shared workflows ref: $REF"
-
-      - name: Checkout caller repo
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.git_ref || github.ref }}
-          path: caller
-
-      - name: Checkout shared workflows repo
-        uses: actions/checkout@v7
-        with:
-          repository: aexionsolutions/azure-devops-workflows
-          ref: ${{ steps.wfref.outputs.ref }}
-          path: shared
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ inputs.node_version }}
-
-      - name: Setup .NET (for running API and E2E tests)
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Download API artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: api-e2e-${{ github.run_id }}
-          path: caller/api-publish
-
-      - name: Start the stack (database, API, web)
-        id: stack
-        uses: ./shared/.github/actions/e2e-start-stack
-        with:
-          repo_preset: ${{ inputs.repo_preset }}
-          database_port: ${{ inputs.database_port }}
-          api_port: ${{ inputs.api_port }}
-          web_port: ${{ inputs.web_port }}
-          postgres_user: ${{ inputs.postgres_user }}
-          postgres_db: ${{ inputs.postgres_db }}
-          postgres_password_input: ${{ inputs.postgres_password }}
-          postgres_password_secret: ${{ secrets.POSTGRES_PASSWORD }}
-          e2e_jwt_signing_key: ${{ secrets.E2E_JWT_SIGNING_KEY }}
-          e2e_jwt_audience: ${{ secrets.E2E_JWT_AUDIENCE }}
-          enable_azurite: ${{ inputs.enable_azurite }}
-          e2e_env_vars: ${{ inputs.e2e_env_vars }}
-          e2e_secrets: ${{ secrets.e2e_secrets }}
-          graph_client_id: ${{ inputs.graph_client_id }}
-          graph_client_secret: ${{ secrets.graph_client_secret }}
-          api_app_id: ${{ inputs.api_app_id }}
-          extension_app_id: ${{ inputs.extension_app_id }}
-          b2c_tenant_id: ${{ inputs.b2c_tenant_id }}
-          graph_tenant_domain: ${{ inputs.graph_tenant_domain }}
-          google_maps_platform_server_api_key: ${{ secrets.google_maps_platform_server_api_key }}
-          api_project: ${{ inputs.api_project }}
-          seed_data_script: ${{ inputs.seed_data_script }}
-          web_directory: ${{ inputs.web_directory }}
-
-      - name: Run Reqnroll E2E tests
-        uses: ./shared/.github/actions/e2e-run-reqnroll
-        with:
-          e2e_project: ${{ inputs.e2e_project }}
-          run_smoke_only: ${{ inputs.run_smoke_only }}
-          test_filter: ${{ inputs.test_filter }}
-          retry_attempts: ${{ inputs.e2e_retry_attempts }}
-          console_verbosity: ${{ inputs.console_verbosity }}
-          enable_video: ${{ inputs.e2e_enable_video }}
-          database_port: ${{ steps.stack.outputs.database_port }}
-          api_port: ${{ steps.stack.outputs.api_port }}
-          web_port: ${{ steps.stack.outputs.web_port }}
-          postgres_user: ${{ inputs.postgres_user }}
-          postgres_db: ${{ inputs.postgres_db }}
-          jwt_signing_key: ${{ steps.stack.outputs.jwt_signing_key }}
-          jwt_issuer: ${{ steps.stack.outputs.jwt_issuer }}
-          jwt_audience: ${{ steps.stack.outputs.jwt_audience }}
-          b2c_authority: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
-          b2c_client_id: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
-          b2c_scope: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
-          b2c_client_secret: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          artifact_suffix: -reqnroll
-
-      - name: Stop the stack
-        if: always()
-        uses: ./shared/.github/actions/e2e-stop-stack
-        with:
-          job_status: ${{ job.status }}
-          api_port: ${{ steps.stack.outputs.api_port }}
-          web_port: ${{ steps.stack.outputs.web_port }}
-          artifact_suffix: -reqnroll
-          suite: Reqnroll
-          repo_preset: ${{ inputs.repo_preset }}
-          run_smoke_only: ${{ inputs.run_smoke_only }}
-          test_filter: ${{ inputs.test_filter }}
-          ran_reqnroll: 'true'
-          enable_video: ${{ inputs.e2e_enable_video }}
-
-  # parallel_suites on: the Playwright suite in its own job, one per shard.
-  e2e-playwright:
-    name: E2E Tests (${{ matrix.leg }})
-    if: needs.plan-e2e.outputs.mode == 'parallel' && needs.plan-e2e.outputs.playwright_legs != '[]'
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
-    needs: [build-api, plan-e2e]
-    strategy:
-      # Let every shard finish so one failing shard does not hide another's failures.
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan-e2e.outputs.playwright_legs) }}
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: ${{ inputs.postgres_user }}
-          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
-          POSTGRES_DB: ${{ inputs.postgres_db }}
-        ports:
-          - ${{ inputs.database_port || 5432 }}:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:latest
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
-    steps:
-      - name: Resolve shared workflows ref
-        id: wfref
-        shell: bash
-        env:
-          INPUT_REF: ${{ inputs.shared_ref }}
-        run: |
-          set -euo pipefail
-          REF="${INPUT_REF:-main}"
-          if [ -z "$INPUT_REF" ]; then
-            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
-            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "Resolved shared workflows ref: $REF"
-
-      - name: Checkout caller repo
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.git_ref || github.ref }}
-          path: caller
-
-      - name: Checkout shared workflows repo
-        uses: actions/checkout@v7
-        with:
-          repository: aexionsolutions/azure-devops-workflows
-          ref: ${{ steps.wfref.outputs.ref }}
-          path: shared
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ inputs.node_version }}
-
-      - name: Setup .NET (for running the API)
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Download API artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: api-e2e-${{ github.run_id }}
-          path: caller/api-publish
-
-      - name: Start the stack (database, API, web)
-        id: stack
-        uses: ./shared/.github/actions/e2e-start-stack
-        with:
-          repo_preset: ${{ inputs.repo_preset }}
-          database_port: ${{ inputs.database_port }}
-          api_port: ${{ inputs.api_port }}
-          web_port: ${{ inputs.web_port }}
-          postgres_user: ${{ inputs.postgres_user }}
-          postgres_db: ${{ inputs.postgres_db }}
-          postgres_password_input: ${{ inputs.postgres_password }}
-          postgres_password_secret: ${{ secrets.POSTGRES_PASSWORD }}
-          e2e_jwt_signing_key: ${{ secrets.E2E_JWT_SIGNING_KEY }}
-          e2e_jwt_audience: ${{ secrets.E2E_JWT_AUDIENCE }}
-          enable_azurite: ${{ inputs.enable_azurite }}
-          e2e_env_vars: ${{ inputs.e2e_env_vars }}
-          e2e_secrets: ${{ secrets.e2e_secrets }}
-          graph_client_id: ${{ inputs.graph_client_id }}
-          graph_client_secret: ${{ secrets.graph_client_secret }}
-          api_app_id: ${{ inputs.api_app_id }}
-          extension_app_id: ${{ inputs.extension_app_id }}
-          b2c_tenant_id: ${{ inputs.b2c_tenant_id }}
-          graph_tenant_domain: ${{ inputs.graph_tenant_domain }}
-          google_maps_platform_server_api_key: ${{ secrets.google_maps_platform_server_api_key }}
-          api_project: ${{ inputs.api_project }}
-          seed_data_script: ${{ inputs.seed_data_script }}
-          web_directory: ${{ inputs.web_directory }}
-
-      - name: Run Playwright tests
-        uses: ./shared/.github/actions/e2e-run-playwright
-        with:
-          web_directory: ${{ inputs.web_directory }}
-          web_port: ${{ steps.stack.outputs.web_port }}
-          shard: ${{ matrix.shard }}
-          max_failures: ${{ inputs.playwright_max_failures }}
-          run_smoke_only: ${{ inputs.run_smoke_only }}
-          smoke_config: ${{ inputs.playwright_smoke_config }}
-          b2c_authority: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
-          b2c_client_id: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
-          b2c_scope: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
-          b2c_client_secret: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          artifact_suffix: ${{ matrix.suffix }}
-
-      - name: Stop the stack
-        if: always()
-        uses: ./shared/.github/actions/e2e-stop-stack
-        with:
-          job_status: ${{ job.status }}
-          api_port: ${{ steps.stack.outputs.api_port }}
-          web_port: ${{ steps.stack.outputs.web_port }}
-          artifact_suffix: ${{ matrix.suffix }}
-          suite: ${{ matrix.shard != '' && format('Playwright (shard {0})', matrix.shard) || 'Playwright' }}
-          repo_preset: ${{ inputs.repo_preset }}
-          run_smoke_only: ${{ inputs.run_smoke_only }}
-          ran_playwright: 'true'
-          web_directory: ${{ inputs.web_directory }}

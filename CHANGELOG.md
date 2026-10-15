@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **E2E entry points split; `parallel_suites` removed.** `web-e2e-ci.yml` now
+  runs only the combined `E2E Tests` job (every suite in sequence); the new
+  `web-e2e-parallel-ci.yml` runs only `E2E Tests (reqnroll)` and the
+  `E2E Tests (playwright…)` shard jobs (`playwright_shards`). Each workflow
+  contains just its own jobs, so callers no longer see the other mode's jobs
+  as skipped checks. Same inputs otherwise, same composite actions, same job
+  and artifact names, so running check names are unchanged. Migration: a
+  caller passing `parallel_suites: true` calls `web-e2e-parallel-ci.yml`
+  instead and drops that input; a caller that did not pass it changes nothing.
+
 ### Fixed
 
 - **`dotnet-test-retry`: a failure stays a failure until the test passes.**
