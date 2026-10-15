@@ -128,6 +128,7 @@ This action fixes several critical issues found in naive retry implementations:
 | `attempts-used` | Number of attempts used |
 | `failed-tests-count` | Number of tests that failed on first attempt |
 | `provider-quota-skipped-count` | Number of tests that did not run because a provider quota was exhausted (see below) |
+| `opt-in-skipped-count` | Number of opt-in tests that did not run because their configuration turned them off (see below) |
 
 ## Provider-quota skips
 
@@ -142,6 +143,20 @@ only once the provider's own response proves the quota is exhausted. Such a test
 A setup error without the marker is still retried and still fails, and a `Failed` result is never treated as a quota
 skip whatever its message says. The rules live in `TrxSelection.ps1`; `Tests/TrxSelection.Tests.ps1` (Pester 5,
 run by `action-tests.yml`) covers them.
+
+## Opt-in skips
+
+A test that is off by configuration (its credentials or opt-in flag are absent) should skip itself
+(`Assert.Ignore` or `Assert.Inconclusive`) with a message that **starts with** `[opt-in]`. A retry runs with the same
+configuration, so such a test:
+
+- is **not retried** and is **not counted as a failure**;
+- is **reported**: a notice annotation, a job-summary section listing it, and the `opt-in-skipped-count` output. It
+  gave no coverage.
+
+Use the marker only for skips decided by configuration. A skip that depends on timing or data (a challenge page, a
+record not there yet) should not carry it: without the marker a skip with a message is retried, since it may hide a
+hook failure.
 
 ## How It Works
 

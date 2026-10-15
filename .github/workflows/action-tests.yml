@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   pester:
-    name: Pester (dotnet-test-retry)
+    name: Pester (action scripts)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -29,5 +29,5 @@ jobs:
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module Pester -RequiredVersion 5.6.1 -Scope CurrentUser -Force
           Import-Module Pester -RequiredVersion 5.6.1
-          $result = Invoke-Pester -Path .github/actions/dotnet-test-retry/Tests -Output Detailed -PassThru
+          $result = Invoke-Pester -Path .github/actions -Output Detailed -PassThru
           if ($result.FailedCount -gt 0 -or $result.PassedCount -eq 0) { exit 1 }
