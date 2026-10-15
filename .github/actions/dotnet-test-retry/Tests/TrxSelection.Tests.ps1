@@ -29,6 +29,7 @@ BeforeAll {
   }
 
   $quotaMessage = '[provider-quota] Paystack returned 503 payment_provider_rate_limited: its test-mode daily bank-resolution limit is exhausted.'
+  $optInMessage = '[opt-in] Paystack E2E is opt-in. Set E2E_RUN_PAYSTACK=true to run @paystack scenarios.'
 }
 
 Describe 'Retry selection' {
@@ -77,6 +78,42 @@ Describe 'Retry selection' {
   }
 }
 
+Describe 'Opt-in skips' {
+  It 'does not retry a test skipped as opt-in (ignored or inconclusive)' {
+    $trx = New-TrxFixture @(
+      @{ Name = 'Ignored'; Outcome = 'NotExecuted'; Message = $optInMessage },
+      @{ Name = 'Inconclusive'; Outcome = 'Inconclusive'; Message = $optInMessage })
+    @(Get-FailedFQNsFromTrx $trx) | Should -HaveCount 0
+    @(Get-OptInSkippedFQNsFromTrx $trx) | Should -Be @('Suite.Feature.Ignored', 'Suite.Feature.Inconclusive')
+  }
+
+  It 'still retries a skip whose message does not start with the opt-in marker' {
+    $trx = New-TrxFixture @(@{ Name = 'Challenge'; Outcome = 'NotExecuted'; Message = 'Paystack hosted checkout is showing Cloudflare human verification ([opt-in] not applicable).' })
+    @(Get-FailedFQNsFromTrx $trx) | Should -Be @('Suite.Feature.Challenge')
+    @(Get-OptInSkippedFQNsFromTrx $trx) | Should -HaveCount 0
+  }
+
+  It 'never treats a failed test as an opt-in skip, whatever its message says' {
+    $trx = New-TrxFixture @(@{ Name = 'FailedWithMarker'; Outcome = 'Failed'; Message = $optInMessage })
+    @(Get-FailedFQNsFromTrx $trx) | Should -Be @('Suite.Feature.FailedWithMarker')
+    @(Get-OptInSkippedFQNsFromTrx $trx) | Should -HaveCount 0
+  }
+}
+
+Describe 'TRX readability' {
+  It 'tells a TRX with no failures from a missing or corrupt one' {
+    $clean = New-TrxFixture @(@{ Name = 'Passes'; Outcome = 'Passed' })
+    $corrupt = Join-Path $TestDrive 'corrupt.trx'
+    Set-Content -Path $corrupt -Value '<TestRun><Results>' -Encoding utf8
+
+    Test-TrxReadable $clean | Should -BeTrue
+    Test-TrxReadable $corrupt | Should -BeFalse
+    Test-TrxReadable (Join-Path $TestDrive 'missing.trx') | Should -BeFalse
+    # Why callers need it: an empty failure list arrives as $null, exactly like a missing TRX.
+    Get-FailedFQNsFromTrx $clean | Should -BeNullOrEmpty
+  }
+}
+
 Describe 'Provider-quota skip report' {
   It 'counts quota skips across attempts once each, and reports none when there are none' {
     $dir = Join-Path $TestDrive ('results-{0}' -f [guid]::NewGuid())
@@ -86,7 +123,8 @@ Describe 'Provider-quota skip report' {
         @{ Name = 'Flaky'; Outcome = 'Failed'; Message = 'boom' })) (Join-Path $dir 'e2e-attempt-1.trx')
     Copy-Item (New-TrxFixture @(
         @{ Name = 'QuotaA'; Outcome = 'NotExecuted'; Message = $quotaMessage },
-        @{ Name = 'Flaky'; Outcome = 'NotExecuted'; Message = $quotaMessage })) (Join-Path $dir 'e2e-attempt-2.trx')
+        @{ Name = 'Flaky'; Outcome = 'NotExecuted'; Message = $quotaMessage },
+        @{ Name = 'OptedOut'; Outcome = 'NotExecuted'; Message = $optInMessage })) (Join-Path $dir 'e2e-attempt-2.trx')
 
     $output = Join-Path $TestDrive 'output.txt'
     $summary = Join-Path $TestDrive 'summary.md'
@@ -97,7 +135,9 @@ Describe 'Provider-quota skip report' {
     & (Join-Path $PSScriptRoot '..' 'Report-ProviderQuotaSkips.ps1') | Out-Null
 
     (Get-Content $output) | Should -Contain 'provider-quota-skipped-count=2'
+    (Get-Content $output) | Should -Contain 'opt-in-skipped-count=1'
     (Get-Content $summary -Raw) | Should -Match 'Suite\.Feature\.QuotaA'
+    (Get-Content $summary -Raw) | Should -Match 'opt-in test\(s\) not run[\s\S]*Suite\.Feature\.OptedOut'
 
     Remove-Item $output
     $empty = Join-Path $TestDrive ('empty-{0}' -f [guid]::NewGuid())
@@ -105,5 +145,6 @@ Describe 'Provider-quota skip report' {
     $env:INPUT_RESULTS_DIRECTORY = $empty
     & (Join-Path $PSScriptRoot '..' 'Report-ProviderQuotaSkips.ps1') | Out-Null
     (Get-Content $output) | Should -Contain 'provider-quota-skipped-count=0'
+    (Get-Content $output) | Should -Contain 'opt-in-skipped-count=0'
   }
 }
