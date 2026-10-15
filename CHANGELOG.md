@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- **Plain-English check names.** Job display names change, so the check names
+  callers see change too; job ids, `needs`, outputs and artifact names do not.
+  A caller that requires any of the old names in branch protection must run the
+  new names green first and then swap the required checks.
+
+  | Workflow | Old name | New name |
+  | --- | --- | --- |
+  | `dotnet-ci.yml` | `build-and-unit-tests` | `API build and unit tests` |
+  | | `web-unit-tests` | `Web unit tests` |
+  | | `build-integration-tests` | `API integration build` |
+  | | `integration-test-shards (<shard>)` | `API integration tests (<shard>)` |
+  | | `integration-tests` | `API integration tests` |
+  | | `coverage-gate` | `Coverage gate` |
+  | | `sonar-analysis` | `Sonar analysis` |
+  | `web-ci.yml` | `web-ci` | `Lint and build` (`Lint, unit tests and build` with `run_tests`) |
+  | `web-e2e-ci.yml` | `Plan E2E` | `Plan` |
+  | | `E2E Tests` | `Reqnroll and Playwright` |
+  | `web-e2e-parallel-ci.yml` | `Plan E2E` | `Plan` |
+  | | `E2E Tests (reqnroll)` | `Reqnroll` |
+  | | `E2E Tests (playwright-1-of-2)` | `Playwright 1 of 2` (or `Playwright` with one shard) |
+
+  Deploy, release and deployed-E2E workflow names are unchanged.
+
 - **E2E entry points split; `parallel_suites` removed.** `web-e2e-ci.yml` now
   runs only the combined `E2E Tests` job (every suite in sequence); the new
   `web-e2e-parallel-ci.yml` runs only `E2E Tests (reqnroll)` and the
