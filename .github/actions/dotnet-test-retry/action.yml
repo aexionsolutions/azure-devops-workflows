@@ -4,6 +4,8 @@ author: 'DevOps Team'
 # v4.3.0: Fixed critical infrastructure failure detection bug
 # v4.3.2: TRX missing on retry → fall back to last known failure list instead of aborting
 # v4.4.0: Track NotExecuted/Inconclusive TRX outcomes so summary totals add up; retry NotExecuted tests
+# v4.13.0: Tests skipped for an exhausted provider quota (message starting "[provider-quota]") are not retried or
+#          counted as failures, and are reported separately (provider-quota-skipped-count, warning, job summary)
 
 inputs:
   project:
@@ -62,6 +64,9 @@ outputs:
   failed-tests-last:
     description: 'Pipe-delimited list of failed tests (Fully Qualified Names) on the final attempt'
     value: ${{ steps.test-retry.outputs.failed-tests-last }}
+  provider-quota-skipped-count:
+    description: 'Number of tests that did not run because a provider quota was exhausted (inconclusive with a message starting "[provider-quota]"). Not failures, and no coverage.'
+    value: ${{ steps.provider-quota.outputs.provider-quota-skipped-count }}
 
 runs:
   using: 'composite'
@@ -82,3 +87,14 @@ runs:
         INPUT_CONSOLE_VERBOSITY: ${{ inputs.console-verbosity }}
       run: |
         & "${{ github.action_path }}/Invoke-SmartTestRetry.ps1"
+
+    # Whatever the outcome: a provider-quota skip is not a failure, so without this it would pass unnoticed.
+    - name: Report provider-quota skips
+      id: provider-quota
+      if: always()
+      shell: pwsh
+      env:
+        INPUT_RESULTS_DIRECTORY: ${{ inputs.results-directory }}
+        INPUT_TRX_FILENAME_PREFIX: ${{ inputs.trx-filename-prefix }}
+      run: |
+        & "${{ github.action_path }}/Report-ProviderQuotaSkips.ps1"
