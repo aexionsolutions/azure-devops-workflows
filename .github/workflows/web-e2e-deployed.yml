@@ -71,6 +71,12 @@ on:
         type: number
         default: 2
 
+      playwright_max_failures:
+        description: 'Stop the Playwright run once this many tests are still failing after their retries (npx playwright test --max-failures). A test counts only when it has no retries left, and tests already running finish. 0 disables the limit.'
+        required: false
+        type: number
+        default: 10
+
       playwright_install_timeout_minutes:
         description: 'Maximum minutes allowed for Playwright browser/system dependency installation'
         required: false
@@ -653,6 +659,7 @@ jobs:
           BASE_URL: ${{ inputs.web_url }}
           API_BASE_URL: ${{ inputs.api_url }}
           START_WEB_SERVER: 'false'
+          PLAYWRIGHT_MAX_FAILURES: ${{ inputs.playwright_max_failures }}
           E2E_AUTH_TOKEN: ${{ secrets.E2E_AUTH_TOKEN }}
           E2E_API_KEY: ${{ inputs.api_key }}
           # B2C Configuration (with backwards compatibility for legacy secret names)
@@ -685,8 +692,15 @@ jobs:
           if [ "${{ inputs.e2e_enable_video }}" = "true" ]; then
             video_arg="--video=on"
           fi
-          
-          npx playwright test $config_arg $project_arg $video_arg --retries=${{ inputs.playwright_retry_attempts }}
+
+          # A broken deployment fails every test, each on every retry: stop early instead.
+          max_failures_arg=""
+          if [ "${PLAYWRIGHT_MAX_FAILURES:-0}" -gt 0 ]; then
+            max_failures_arg="--max-failures=$PLAYWRIGHT_MAX_FAILURES"
+            echo "   Stops once $PLAYWRIGHT_MAX_FAILURES tests are still failing after their retries"
+          fi
+
+          npx playwright test $config_arg $project_arg $video_arg $max_failures_arg --retries=${{ inputs.playwright_retry_attempts }}
       
       # Upload Playwright artifacts
       - name: Upload Playwright report

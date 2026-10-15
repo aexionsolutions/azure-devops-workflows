@@ -19,10 +19,17 @@ on:
         required: false
         type: string
         default: '20'
+      job_timeout_minutes:
+        description: 'Timeout for the job. Lint and build take about 3 minutes, unit tests about 10 more; a hung job otherwise runs for GitHub''s 6-hour default.'
+        required: false
+        type: number
+        default: 30
 
 jobs:
+  # Lints, unit-tests (when run_tests) and builds the web app. Browser (E2E) tests run in web-e2e-ci.yml.
   web-ci:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,10 +50,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         run: npm run lint --if-present
 
-      - name: Install Playwright browsers
-        if: inputs.run_tests == true
-        working-directory: ${{ inputs.working_directory }}
-        run: npx playwright install --with-deps
+      # Unit tests only (npm test). No browsers are installed: browser tests belong to web-e2e-ci.yml.
       - name: Test (if enabled)
         if: inputs.run_tests == true
         working-directory: ${{ inputs.working_directory }}

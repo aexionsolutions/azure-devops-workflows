@@ -331,6 +331,7 @@ with:
 | `playwright_project` | `''` | Playwright project (e.g., `chromium`, `firefox`). Empty = run all projects; install step defaults to Chromium dependencies. |
 | `e2e_retry_attempts` | `3` | Retry attempts (higher default than CI workflow) |
 | `playwright_retry_attempts` | `2` | Retry attempts passed to Playwright |
+| `playwright_max_failures` | `10` | Stop once this many tests are still failing after their retries (`--max-failures`; tests already running finish). `0` disables the limit |
 | `playwright_install_timeout_minutes` | `15` | Maximum minutes for Playwright browser/system dependency installation |
 | `e2e_enable_video` | `false` | Capture video recordings |
 | `console_verbosity` | `normal` | Console logger verbosity for `dotnet test` |

@@ -106,6 +106,21 @@ on:
         type: string
         description: 'Assembly filters for code coverage (e.g., -MyApp.Tests;-MyApp.Infrastructure). Test assemblies are automatically excluded.'
         default: ''
+      coverage_exclude_by_file:
+        required: false
+        type: string
+        description: 'Source files the coverage collector must not instrument, as comma-separated globs (coverlet ExcludeByFile), e.g. **/Migrations/*.cs. Applied at collection time in the unit and integration runs, so excluded code costs no instrumentation or report time. Blank instruments everything (backward compatible).'
+        default: ''
+      node_version:
+        required: false
+        type: string
+        description: 'Node.js version for the web unit tests and the Sonar job.'
+        default: '20'
+      job_timeout_minutes:
+        required: false
+        type: number
+        description: 'Timeout for each long-running job (build and unit tests, web unit tests, each integration shard, Sonar). Observed worst cases are about 35 minutes on a degraded runner; a hung job otherwise runs for GitHub''s 6-hour default.'
+        default: 45
     secrets:
       SONAR_TOKEN:
         required: false
@@ -117,6 +132,7 @@ on:
 jobs:
   build-and-unit-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     permissions:
       contents: read
 
@@ -188,15 +204,23 @@ jobs:
           echo "Resolved unit test project: $UNIT"
 
       - name: Unit Tests + Coverage (OpenCover)
+        env:
+          COVERAGE_EXCLUDE_BY_FILE: ${{ inputs.coverage_exclude_by_file }}
         run: |
           echo "### Running Unit Tests (Fast Feedback)" >> "$GITHUB_STEP_SUMMARY"
+
+          COVERAGE_SETTINGS=("DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover")
+          if [ -n "$COVERAGE_EXCLUDE_BY_FILE" ]; then
+            COVERAGE_SETTINGS+=("DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeByFile=$COVERAGE_EXCLUDE_BY_FILE")
+            echo "Coverage excludes files: \`$COVERAGE_EXCLUDE_BY_FILE\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           set +e
           dotnet test ${{ steps.test_projects.outputs.unit }} \
             -c Release --no-build \
             --collect:"XPlat Code Coverage" \
             --logger "trx;LogFileName=unit.trx" \
-            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+            -- "${COVERAGE_SETTINGS[@]}"
           TEST_EXIT=$?
           set -e
 
@@ -367,6 +391,7 @@ jobs:
     name: web-unit-tests
     if: inputs.run_web_unit_tests == true
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     permissions:
       contents: read
 
@@ -380,7 +405,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: ${{ inputs.node_version }}
 
       - name: Web unit tests + coverage (vitest)
         working-directory: caller/${{ inputs.web_working_directory }}
@@ -413,6 +438,7 @@ jobs:
     name: integration-test-shards (${{ matrix.name }})
     if: inputs.run_integration == true
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     permissions:
       contents: read
 
@@ -495,6 +521,7 @@ jobs:
           ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=${{ inputs.postgres_db || 'ci_test' }};Username=postgres;Password=test_password_123"
           INTEGRATION_SHARD_NAME: ${{ matrix.name }}
           INTEGRATION_TEST_FILTER: ${{ matrix.filter }}
+          COVERAGE_EXCLUDE_BY_FILE: ${{ inputs.coverage_exclude_by_file }}
         run: |
           set -euo pipefail
 
@@ -537,13 +564,19 @@ jobs:
 
           echo "Discovered tests: $EXPECTED_COUNT" >> "$GITHUB_STEP_SUMMARY"
 
+          COVERAGE_SETTINGS=("DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover")
+          if [ -n "$COVERAGE_EXCLUDE_BY_FILE" ]; then
+            COVERAGE_SETTINGS+=("DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeByFile=$COVERAGE_EXCLUDE_BY_FILE")
+            echo "Coverage excludes files: \`$COVERAGE_EXCLUDE_BY_FILE\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           set +e
           dotnet test ${{ steps.test_projects.outputs.integration }} \
             -c Release --no-build \
             "${FILTER_ARGS[@]}" \
             --collect:"XPlat Code Coverage" \
             --logger "trx;LogFileName=integration.trx" \
-            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+            -- "${COVERAGE_SETTINGS[@]}"
           TEST_EXIT=$?
           set -e
 
@@ -625,6 +658,7 @@ jobs:
     if: always() && inputs.run_integration == true
     needs: [integration-test-shards]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
 
@@ -644,6 +678,7 @@ jobs:
     if: always() && inputs.run_integration == true && inputs.enforce_coverage == true
     needs: [build-and-unit-tests, integration-tests]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
 
@@ -755,6 +790,7 @@ jobs:
       && (inputs.run_web_unit_tests != true || needs.web-unit-tests.result == 'success')
     needs: [build-and-unit-tests, web-unit-tests, integration-tests]
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
     permissions:
       contents: read
 
@@ -806,7 +842,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: ${{ inputs.node_version }}
 
       - name: Detect SonarCloud
         id: sonar
