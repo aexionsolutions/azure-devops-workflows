@@ -6,6 +6,11 @@
 # "false"). Masking a flag-like value (true/false/yes/no/on/off or one digit) also replaces that text everywhere else
 # in the log with ***, so such a value gets a warning naming its key: if the key is not a secret, move it to
 # e2e_env_vars.
+#
+# Callers run it as a child process (bash load-e2e-secrets.sh), which does not inherit the step's error handling, so
+# it sets its own: any failed command fails the step rather than reporting secrets as loaded (missing credentials would
+# otherwise turn into skipped scenarios instead of a failed setup).
+set -euo pipefail
 
 if [ -z "${E2E_SECRETS_JSON:-}" ] || [ "$E2E_SECRETS_JSON" = "{}" ]; then
   echo "ℹ️  No additional E2E secrets JSON to load"
@@ -13,13 +18,19 @@ if [ -z "${E2E_SECRETS_JSON:-}" ] || [ "$E2E_SECRETS_JSON" = "{}" ]; then
 fi
 
 echo "🔐 Loading additional E2E secrets from JSON..."
-if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
+if ! echo "$E2E_SECRETS_JSON" | jq empty >/dev/null 2>&1; then
   echo "❌ Error: Invalid e2e_secrets JSON syntax"
+  exit 1
+fi
+ROOT_TYPE=$(echo "$E2E_SECRETS_JSON" | jq -r 'type')
+if [ "$ROOT_TYPE" != "object" ]; then
+  echo "❌ Error: e2e_secrets must be a JSON object of NAME: value pairs (got a JSON $ROOT_TYPE)"
   exit 1
 fi
 
 # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
 TEMP_FILE=$(mktemp)
+trap 'rm -f "$TEMP_FILE"' EXIT
 echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
 COUNT=$(wc -l < "$TEMP_FILE")
 echo "Loaded secret keys:"

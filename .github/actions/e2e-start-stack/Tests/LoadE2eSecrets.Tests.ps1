@@ -50,4 +50,37 @@ Describe 'Loading E2E secrets (real script)' -Skip:(-not $IsLinux) {
   It 'fails on invalid JSON' {
     (Invoke-LoadSecrets '{not json').Exit | Should -Be 1
   }
+
+  It 'fails on valid JSON that is not an object of NAME: value pairs' {
+    foreach ($json in @('true', '"secret"', '[1,2]', '42', 'null')) {
+      $run = Invoke-LoadSecrets $json
+      $run.Exit | Should -Be 1 -Because "$json is not an object"
+      $run.Output | Should -Not -Match 'loaded and masked'
+    }
+  }
+
+  It 'fails, without claiming success, when extracting the values fails' {
+    # A fake jq that validates normally but fails the extraction. The callers run the script as a child process, so it
+    # must stop on its own: reporting secrets as loaded would turn missing credentials into skipped scenarios.
+    $realJq = (Get-Command jq).Source
+    $bin = Join-Path $TestDrive ('fake-jq-{0}' -f [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $bin | Out-Null
+    @"
+#!/usr/bin/env bash
+case "`$*" in *to_entries*) echo 'jq: injected extraction failure' >&2; exit 5;; esac
+exec "$realJq" "`$@"
+"@ | Set-Content -Path (Join-Path $bin 'jq') -NoNewline
+    chmod +x (Join-Path $bin 'jq')
+    $oldPath = $env:PATH
+    $env:PATH = "$bin$([IO.Path]::PathSeparator)$oldPath"
+    try {
+      $run = Invoke-LoadSecrets '{"PAYSTACK_TEST_SECRET_KEY":"sk_test_abc123"}'
+    } finally {
+      $env:PATH = $oldPath
+    }
+
+    $run.Exit | Should -Not -Be 0
+    $run.Output | Should -Contain 'jq: injected extraction failure'
+    $run.Output | Should -Not -Match 'loaded and masked'
+  }
 }

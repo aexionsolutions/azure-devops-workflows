@@ -36,7 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logic, previously duplicated in `e2e-start-stack` and `web-e2e-deployed.yml`,
   is one script (`e2e-start-stack/load-e2e-secrets.sh`) covered by
   `Tests/LoadE2eSecrets.Tests.ps1`; `action-tests.yml` now runs every action's
-  tests.
+  tests. The script stops on any failed command (`set -euo pipefail`; as a
+  child process it does not inherit the step's error handling) and rejects
+  valid JSON that is not an object, so a broken load fails the setup instead
+  of reporting secrets as loaded.
 
 ### Changed (breaking)
 
