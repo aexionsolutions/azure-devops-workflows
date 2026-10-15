@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coverage exclusions, excluded files are never instrumented.
 - **Node version for web unit tests:** `dotnet-ci.yml` accepts `node_version`
   (default `'20'`) for `web-unit-tests` and Sonar, which were hardcoded to 20.
+- **Provider-quota skips in `dotnet-test-retry`:** a test marked inconclusive
+  with a message starting `[provider-quota]` (an external provider's quota is
+  exhausted, as proved by the provider's response) is no longer retried or
+  counted as a failure. It is reported separately instead: a warning, a
+  job-summary section and the `provider-quota-skipped-count` output. Before,
+  one real failure triggered retries of every such skip, which hit the same
+  exhausted quota again and were counted as "final failed tests" (one
+  RavenXpress run reported 21 for 1 failure and 20 skips). Setup errors
+  without the marker are still retried. Selection moved to `TrxSelection.ps1`,
+  with Pester tests run by the new `action-tests.yml`.
 
 - **Parallel E2E suites (opt-in):** `web-e2e-ci.yml` accepts `parallel_suites`
   and `playwright_shards`. With `parallel_suites: true`, Reqnroll and
@@ -46,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Web installs use the committed lockfile:** `web-ci.yml` and
+  `dotnet-ci.yml`'s `web-unit-tests` run `npm ci` when a `package-lock.json`
+  exists, instead of deleting it and running `npm install`. Resolving afresh
+  tested a different dependency tree on every run and broke whenever the
+  registry did: on 2026-10-15 every RavenXpress run failed in 20 seconds with
+  `Cannot read properties of null (reading 'edgesOut')`, reproduced in a clean
+  `node:20` container from `package.json` alone. RavenXpress's lockfile holds
+  the Linux native bindings (rolldown, Next SWC, sharp, Tailwind oxide), so
+  `npm ci` installs and runs Vitest there; the E2E jobs already used it.
 - **`web-ci.yml` no longer installs Playwright browsers:** its test step runs
   `npm test` (unit tests); browser tests belong to `web-e2e-ci.yml`. The
   install was skipped in PR runs and wasted minutes in release runs.

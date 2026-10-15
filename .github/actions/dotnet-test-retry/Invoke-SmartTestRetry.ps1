@@ -41,15 +41,9 @@ function Get-TrxPath([int]$attempt) {
   Join-Path $resultsDir ('{0}-{1}.trx' -f $trxPrefix, $attempt)
 }
 
-function Load-Trx([string]$path) {
-  $xml = New-Object System.Xml.XmlDocument
-  $xml.PreserveWhitespace = $true
-  $xml.Load($path)
-
-  $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
-  $ns.AddNamespace('trx', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
-  @{ Xml = $xml; Ns = $ns }
-}
+# TRX loading and retry selection (Load-Trx, Get-FailedFQNsFromTrx, provider-quota skips) live in their own file so
+# Tests/TrxSelection.Tests.ps1 can check them against TRX fixtures.
+. (Join-Path $PSScriptRoot 'TrxSelection.ps1')
 
 function Get-TrxCounters([string]$trxPath) {
   if (-not (Test-Path $trxPath)) { return $null }
@@ -109,101 +103,6 @@ function Get-TrxSummary([string]$trxPath) {
     Write-Host ("⚠️ Error parsing TRX summary: {0}" -f $_.Exception.Message)
     return $null
   }
-}
-
-function Test-IntentionalNotExecutedSkip {
-  param(
-    [System.Xml.XmlNode]$Node,
-    [System.Xml.XmlNamespaceManager]$Ns
-  )
-
-  $messageNode = $Node.SelectSingleNode('trx:Output/trx:ErrorInfo/trx:Message', $Ns)
-  $stackNode = $Node.SelectSingleNode('trx:Output/trx:ErrorInfo/trx:StackTrace', $Ns)
-  $parts = @()
-  if ($messageNode -ne $null) { $parts += $messageNode.InnerText }
-  if ($stackNode -ne $null) { $parts += $stackNode.InnerText }
-
-  $text = $parts -join "`n"
-  if ([string]::IsNullOrWhiteSpace($text)) { return $false }
-
-  return (
-    $text -like '*Skipping non-@deployed-smoke scenario*' -or
-    $text -like '*Use tools/e2e/run-deployed-e2e.ps1*' -or
-    $text -like '*run-deployed-e2e.ps1*AllowMutatingFullRun*'
-  )
-}
-
-function Get-FailedFQNsFromTrx([string]$trxPath) {
-  # Return $null (not @()) when TRX is missing/unreadable so caller can distinguish
-  # between "TRX exists with 0 failures" vs "TRX doesn't exist/corrupt"
-  if (-not (Test-Path $trxPath)) { return $null }
-
-  try {
-    $doc = Load-Trx $trxPath
-  }
-  catch {
-    Write-Host ("   ⚠️ TRX file exists but is corrupt/truncated: {0}" -f $_.Exception.Message)
-    return $null
-  }
-
-  $xml = $doc.Xml
-  $ns  = $doc.Ns
-
-  # Map UnitTest name -> FullyQualifiedName (className.method)
-  $map = @{}
-  $unitTests = $xml.SelectNodes('//trx:TestDefinitions/trx:UnitTest', $ns)
-  foreach ($ut in $unitTests) {
-    $displayName = $ut.GetAttribute('name')
-    if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
-
-    $tm = $ut.SelectSingleNode('./trx:TestMethod', $ns)
-    if ($tm -ne $null) {
-      $className = $tm.GetAttribute('className')
-      $method    = $tm.GetAttribute('name')
-      if (-not [string]::IsNullOrWhiteSpace($className) -and -not [string]::IsNullOrWhiteSpace($method)) {
-        $map[$displayName] = ('{0}.{1}' -f $className, $method)
-      } else {
-        $map[$displayName] = $displayName
-      }
-    } else {
-      $map[$displayName] = $displayName
-    }
-  }
-
-  # Collect tests with explicitly failed/errored outcomes
-  $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
-
-  # Also collect NotExecuted tests, but ONLY real hook/setup failures.
-  # Some intentional deployed-safety skips are emitted as NotExecuted with
-  # ErrorInfo, so filter those out before building the retry list.
-  $notExecNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='NotExecuted']", $ns)
-  $intentionalNotExecutedSkips = @($notExecNodes | Where-Object {
-    Test-IntentionalNotExecutedSkip -Node $_ -Ns $ns
-  })
-  $hookFailures = @($notExecNodes | Where-Object {
-    $hasErrorInfo = $_.SelectSingleNode('trx:Output/trx:ErrorInfo', $ns) -ne $null
-    $hasErrorInfo -and -not (Test-IntentionalNotExecutedSkip -Node $_ -Ns $ns)
-  })
-  $skippedCount = $notExecNodes.Count - $hookFailures.Count
-  if ($skippedCount -gt 0) {
-    Write-Host ("   ℹ️ {0} intentionally-skipped test(s) will not be retried" -f $skippedCount)
-  }
-  if ($intentionalNotExecutedSkips.Count -gt 0) {
-    Write-Host ("   ℹ️ {0} deployed-safety skipped test(s) were ignored by retry selection" -f $intentionalNotExecutedSkips.Count)
-  }
-
-  $failed = New-Object System.Collections.Generic.List[string]
-  foreach ($n in @($failedNodes) + $hookFailures) {
-    $tn = $n.GetAttribute('testName')
-    if ([string]::IsNullOrWhiteSpace($tn)) { continue }
-    if ($map.ContainsKey($tn)) { $failed.Add($map[$tn]) } else { $failed.Add($tn) }
-  }
-
-  if ($failed.Count -eq 0) {
-    return @()
-  }
-
-  return @($failed | Sort-Object -Unique)
 }
 
 function Merge-TrxResults([string]$baseTrxPath, [int]$totalAttempts) {
