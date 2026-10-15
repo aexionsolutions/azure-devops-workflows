@@ -22,6 +22,10 @@ inputs:
     description: Maximum seconds to spend installing Linux packages required by Playwright
     required: false
     default: '600'
+  max-failures:
+    description: Stop each smoke run after this many failed test attempts (playwright test --max-failures; retries count). The caller's smoke npm scripts must run `playwright test`. 0 disables the limit.
+    required: false
+    default: '10'
 runs:
   using: composite
   steps:
@@ -145,9 +149,12 @@ runs:
       working-directory: ${{ env.CALLER_WORKDIR != '' && format('{0}/{1}', env.CALLER_WORKDIR, inputs.working-directory) || inputs.working-directory }}
       env:
         BASE_URL: ${{ inputs.base-url }}
+        MAX_FAILURES: ${{ inputs.max-failures }}
       run: |
         # Run smoke tests only (no auth-dependent tests)
-        npm run test:e2e:smoke
+        args=()
+        if [ "${MAX_FAILURES:-0}" -gt 0 ]; then args=(-- --max-failures="$MAX_FAILURES"); fi
+        npm run test:e2e:smoke "${args[@]}"
 
     - name: Deployed auth smoke (real B2C)
       if: ${{ inputs.run-auth-smoke == 'true' }}
@@ -157,9 +164,12 @@ runs:
         BASE_URL: ${{ inputs.base-url }}
         B2C_TEST_USER_EMAIL: ${{ steps.credentials.outputs.email }}
         B2C_TEST_USER_PASSWORD: ${{ steps.credentials.outputs.password }}
+        MAX_FAILURES: ${{ inputs.max-failures }}
       run: |
         # Requires B2C_TEST_USER_EMAIL / B2C_TEST_USER_PASSWORD env vars set by the caller.
-        npm run test:e2e:deployed-auth-smoke
+        args=()
+        if [ "${MAX_FAILURES:-0}" -gt 0 ]; then args=(-- --max-failures="$MAX_FAILURES"); fi
+        npm run test:e2e:deployed-auth-smoke "${args[@]}"
 
     - name: Upload Playwright artifacts
       if: always()
