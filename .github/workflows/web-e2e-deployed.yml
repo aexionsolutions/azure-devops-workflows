@@ -520,43 +520,7 @@ jobs:
       - name: Load E2E secrets from JSON
         env:
           E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
-        run: |
-          # Load additional E2E secrets from JSON input (and mask them)
-          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
-            echo "🔐 Loading additional E2E secrets from JSON..."
-            # Validate JSON syntax
-            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_secrets JSON syntax"
-              exit 1
-            fi
-            # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
-            TEMP_FILE=$(mktemp)
-            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
-            echo "Loaded secret keys:"
-            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
-            while IFS=$'\t' read -r key value; do
-              # Mask secrets: full value first (for single-line), then line-by-line (for multi-line)
-              if [[ "$value" != *$'\n'* ]]; then
-                # Single-line secret: mask the whole value
-                echo "::add-mask::$value"
-              else
-                # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
-                while IFS= read -r line; do
-                  [ -n "$line" ] && echo "::add-mask::$line"
-                done <<< "$value"
-              fi
-              DELIM="EOF_$(openssl rand -hex 8)"
-              {
-                echo "${key}<<${DELIM}"
-                echo "${value}"
-                echo "${DELIM}"
-              } >> "$GITHUB_ENV"
-            done < "$TEMP_FILE"
-            rm -f "$TEMP_FILE"
-            echo "✅ E2E secrets loaded and masked"
-          else
-            echo "ℹ️  No additional E2E secrets to load"
-          fi
+        run: bash "$GITHUB_WORKSPACE/shared/.github/actions/e2e-start-stack/load-e2e-secrets.sh"
       
       # Run Reqnroll E2E Tests
       - name: Log Reqnroll E2E configuration

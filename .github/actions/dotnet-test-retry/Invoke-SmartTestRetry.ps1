@@ -324,14 +324,12 @@ if (-not [string]::IsNullOrWhiteSpace($dryRunTrx)) {
   Write-Host ''
   Write-Host ('DRY RUN - parsing TRX: {0}' -f $dryRunTrx)
 
-  $failed = Get-FailedFQNsFromTrx $dryRunTrx
-  
-  if ($failed -eq $null) {
+  if (-not (Test-TrxReadable $dryRunTrx)) {
     Write-Host 'DRY RUN - ERROR: TRX file not found or unreadable'
     exit 1
   }
-  
-  $failed = @($failed)
+
+  $failed = @(Get-FailedFQNsFromTrx $dryRunTrx)
   $orFilter = Build-OrFilter $failed
   $retryFilter = if (-not [string]::IsNullOrWhiteSpace($baseFilter)) { '({0})&({1})' -f $baseFilter, $orFilter } else { $orFilter }
 
@@ -368,13 +366,18 @@ if ($exitCode -eq 0) {
   exit 0
 }
 
-$failed1 = Get-FailedFQNsFromTrx (Get-TrxPath 1)
+$failed1 = @(Get-FailedFQNsFromTrx (Get-TrxPath 1))
 
-# Handle infrastructure failures on first attempt
-if ($failed1 -eq $null) {
-  Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX file missing or unreadable after first attempt.')
+# Handle infrastructure failures on first attempt: no readable TRX, or a non-zero exit with nothing to retry (no
+# failure recorded). Neither is a pass, and a retry would have nothing to run.
+if (-not (Test-TrxReadable (Get-TrxPath 1)) -or $failed1.Count -eq 0) {
+  if ($failed1.Count -eq 0 -and (Test-TrxReadable (Get-TrxPath 1))) {
+    Write-Host ('❌ INFRASTRUCTURE FAILURE: dotnet test exited {0} on the first attempt but the TRX records no retryable failure.' -f $exitCode)
+  } else {
+    Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX file missing or unreadable after first attempt.')
+  }
   Write-Host ('   Test runner crashed or failed before completing.')
-  
+
   ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
   'attempts-used=1' >> $env:GITHUB_OUTPUT
   'failed-tests-count=0' >> $env:GITHUB_OUTPUT
@@ -383,7 +386,6 @@ if ($failed1 -eq $null) {
   exit $exitCode
 }
 
-$failed1 = @($failed1)
 $failedFirstCount = $failed1.Count
 $lastKnownFailed = $failed1
 Write-Host ("   Failures detected (attempt 1): {0}" -f $failedFirstCount)
@@ -419,49 +421,21 @@ while ($attempt -lt $maxAttempts) {
   Write-Host ''
 
   $trxPrev = Get-TrxPath ($attempt - 1)
-  $failedPrev = Get-FailedFQNsFromTrx $trxPrev
+  $failedPrev = @(Get-FailedFQNsFromTrx $trxPrev)
 
-  # CRITICAL: Distinguish between "TRX exists with 0 failures" vs "TRX missing/unreadable"
-  if ($failedPrev -eq $null) {
-    Write-Host ('   ⚠️ TRX from attempt {0} missing — falling back to last known failure list ({1} tests).' -f ($attempt - 1), $lastKnownFailed.Count)
+  # The previous attempt exited non-zero. With no readable TRX, or a TRX that records no retryable failure, there is
+  # nothing new to retry, so run the last known failure list again. That is never a pass by itself: only a later attempt
+  # that exits 0 with every failure resolved passes the run.
+  if (-not (Test-TrxReadable $trxPrev)) {
+    Write-Host ('   ⚠️ TRX from attempt {0} missing or unreadable — retrying the last known failure list ({1} tests).' -f ($attempt - 1), $lastKnownFailed.Count)
+    $failedPrev = $lastKnownFailed
+  } elseif ($failedPrev.Count -eq 0) {
+    Write-Host ('   ⚠️ Attempt {0} exited {1} but its TRX records no retryable failure — retrying the last known failure list ({2} tests).' -f ($attempt - 1), $exitCode, $lastKnownFailed.Count)
     $failedPrev = $lastKnownFailed
   }
 
-  # At this point, $failedPrev is an array (possibly empty)
   $failedPrev = @($failedPrev)
   if ($failedPrev.Count -gt 0) { $lastKnownFailed = $failedPrev }
-  
-  if ($failedPrev.Count -eq 0) {
-    # Earlier failures that have not passed are still failures, whatever this attempt's exit code says.
-    if ($unresolved.Count -gt 0) {
-      Write-UnresolvedFailure 'their retries did not run them to a pass (for example, a provider quota was exhausted)'
-    }
-
-    # TRX exists and shows 0 failures, but dotnet exit code was non-zero
-    # This is ONLY valid if tests actually ran - verify with counters
-    $counters = Get-TrxCounters $trxPrev
-    
-    if ($counters -eq $null -or $counters.total -eq 0) {
-      Write-Host ('❌ INFRASTRUCTURE FAILURE: TRX shows 0 tests executed but dotnet exit code was non-zero.')
-      Write-Host ('   This indicates test runner crash/error, not a transient flake.')
-      
-      ('exit-code={0}' -f $exitCode) >> $env:GITHUB_OUTPUT
-      ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
-      ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
-      'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-      'failed-tests-last=' >> $env:GITHUB_OUTPUT
-      exit $exitCode
-    }
-    
-    # TRX exists, tests ran, but 0 failures recorded - this IS an infra flake
-    Write-Host ('✅ Tests executed ({0} total) with 0 failures but dotnet exit code was non-zero. Marking success (infra flake).' -f $counters.total)
-    'exit-code=0' >> $env:GITHUB_OUTPUT
-    ('attempts-used={0}' -f $attempt) >> $env:GITHUB_OUTPUT
-    ('failed-tests-count={0}' -f $failedFirstCount) >> $env:GITHUB_OUTPUT
-    'failed-tests-last-count=0' >> $env:GITHUB_OUTPUT
-    'failed-tests-last=' >> $env:GITHUB_OUTPUT
-    exit 0
-  }
 
   Write-Host ('⚠️ Retrying failed tests (attempt {0}/{1})' -f $attempt, $maxAttempts)
   Write-Host ('   Failed tests to retry: {0}' -f $failedPrev.Count)
@@ -501,15 +475,14 @@ while ($attempt -lt $maxAttempts) {
 }
 
 # Exhausted attempts
-$lastFailed = Get-FailedFQNsFromTrx (Get-TrxPath $attempt)
+$lastFailed = @(Get-FailedFQNsFromTrx (Get-TrxPath $attempt))
 
-if ($lastFailed -eq $null) {
+if (-not (Test-TrxReadable (Get-TrxPath $attempt)) -or $lastFailed.Count -eq 0) {
   Write-Host ''
-  Write-Host ('   ⚠️ TRX from final attempt missing — using last known failure list ({0} tests).' -f $lastKnownFailed.Count)
-  $lastFailed = $lastKnownFailed
+  Write-Host ('   ⚠️ TRX from final attempt missing or without a retryable failure — using last known failure list ({0} tests).' -f $lastKnownFailed.Count)
+  $lastFailed = @($lastKnownFailed)
 }
 
-$lastFailed = @($lastFailed)
 # Report every failure that never passed, including any the final attempt only skipped.
 foreach ($t in $lastFailed) { [void]$unresolved.Add($t) }
 if ($unresolved.Count -gt 0) { $lastFailed = @($unresolved | Sort-Object) }
