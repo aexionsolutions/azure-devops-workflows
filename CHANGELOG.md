@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`web-e2e-ci.yml`: each suite has its own job definition.** The Reqnroll
+  and Playwright suites used to share one matrix job whose steps were switched
+  on and off per leg, so every job listed the other suite's steps as skipped.
+  Now there are three jobs: `E2E Tests` (parallel_suites off: every suite in
+  sequence, as before), `E2E Tests (reqnroll)` and `E2E Tests (playwright…)`
+  (one per shard). They share their setup, suite runners and teardown as
+  composite actions (`e2e-start-stack`, `e2e-run-reqnroll`,
+  `e2e-run-playwright`, `e2e-stop-stack`), so each job lists only what it runs.
+  Check names, artifact names and inputs are unchanged. Reqnroll still installs
+  Microsoft.Playwright's browsers; only the JavaScript Playwright suite's steps
+  left its job.
 - **Web installs use the committed lockfile:** `web-ci.yml` and
   `dotnet-ci.yml`'s `web-unit-tests` run `npm ci` when a `package-lock.json`
   exists, instead of deleting it and running `npm install`. Resolving afresh

@@ -277,17 +277,19 @@ jobs:
           path: ./api-publish
           retention-days: 1
 
-  # Decides how the E2E suites are split. With parallel_suites off there is one
-  # leg ("all") that runs everything exactly as before, under the historical
-  # "E2E Tests" name and artifact names.
+  # Decides which E2E jobs run. With parallel_suites off, one "E2E Tests" job runs every suite in sequence (the
+  # historical shape, check name and artifact names). With it on, Reqnroll and each Playwright shard get their own
+  # job, each with its own database, API and web.
   plan-e2e:
     name: Plan E2E
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      legs: ${{ steps.plan.outputs.legs }}
+      mode: ${{ steps.plan.outputs.mode }}
+      run_reqnroll: ${{ steps.plan.outputs.run_reqnroll }}
+      playwright_legs: ${{ steps.plan.outputs.playwright_legs }}
     steps:
-      - name: Plan E2E legs
+      - name: Plan E2E jobs
         id: plan
         shell: bash
         env:
@@ -301,40 +303,40 @@ jobs:
             echo "::error::playwright_shards must be between 1 and 8 (got '$SHARDS')."
             exit 1
           fi
-          ALL='[{"leg":"all","reqnroll":true,"playwright":true,"shard":"","suffix":""}]'
+          MODE=combined
+          RUN_REQNROLL=false
           LEGS='[]'
-          if [ "$PARALLEL" = "true" ]; then
-            if [ "$HAS_REQNROLL" = "true" ]; then
-              LEGS=$(jq -c '. + [{"leg":"reqnroll","reqnroll":true,"playwright":false,"shard":"","suffix":"-reqnroll"}]' <<< "$LEGS")
-            fi
+          if [ "$PARALLEL" = "true" ] && { [ "$HAS_REQNROLL" = "true" ] || [ "$HAS_PLAYWRIGHT" = "true" ]; }; then
+            MODE=parallel
+            RUN_REQNROLL="$HAS_REQNROLL"
             if [ "$HAS_PLAYWRIGHT" = "true" ]; then
               for i in $(seq 1 "$SHARDS"); do
                 if [ "$SHARDS" -gt 1 ]; then NAME="playwright-$i-of-$SHARDS"; SHARD="$i/$SHARDS"; else NAME="playwright"; SHARD=""; fi
-                LEGS=$(jq -c --arg n "$NAME" --arg s "$SHARD" \
-                  '. + [{"leg":$n,"reqnroll":false,"playwright":true,"shard":$s,"suffix":("-" + $n)}]' <<< "$LEGS")
+                LEGS=$(jq -c --arg n "$NAME" --arg s "$SHARD" '. + [{"leg":$n,"shard":$s,"suffix":("-" + $n)}]' <<< "$LEGS")
               done
             fi
           elif [ "$SHARDS" -gt 1 ]; then
             echo "::warning::playwright_shards is ignored unless parallel_suites is true."
           fi
-          if [ "$LEGS" = "[]" ]; then LEGS="$ALL"; fi
-          echo "legs=$LEGS" >> "$GITHUB_OUTPUT"
-          echo "E2E legs: $LEGS"
+          {
+            echo "mode=$MODE"
+            echo "run_reqnroll=$RUN_REQNROLL"
+            echo "playwright_legs=$LEGS"
+          } >> "$GITHUB_OUTPUT"
+          echo "E2E mode: $MODE; Reqnroll job: $RUN_REQNROLL; Playwright jobs: $LEGS"
 
-  # E2E tests with full stack (API + Web + DB + Azurite). Each leg is its own
-  # runner with its own services, so legs never share data.
-  web-e2e:
-    name: ${{ matrix.leg == 'all' && 'E2E Tests' || format('E2E Tests ({0})', matrix.leg) }}
+  # The three E2E jobs below share their setup (e2e-start-stack), suite runners (e2e-run-reqnroll,
+  # e2e-run-playwright) and teardown (e2e-stop-stack) as composite actions in this repository, so each job lists
+  # only the steps it runs: no job carries another suite's skipped steps.
+
+  # parallel_suites off: every suite in one job, Reqnroll first, as before. A failing Reqnroll run stops the job
+  # before Playwright, as it always has.
+  e2e-tests:
+    name: E2E Tests
+    if: needs.plan-e2e.outputs.mode == 'combined'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]
-    strategy:
-      # Let every leg finish so one failing suite does not hide another's failures.
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan-e2e.outputs.legs) }}
-    
-    # Docker services for E2E environment
     services:
       postgres:
         image: postgres:15-alpine
@@ -349,38 +351,29 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
       azurite:
         image: mcr.microsoft.com/azure-storage/azurite:latest
         ports:
           - 10000:10000
           - 10001:10001
           - 10002:10002
-    
-    defaults:
-      run:
-        working-directory: caller
-    
     steps:
       - name: Resolve shared workflows ref
         id: wfref
-        working-directory: .
         shell: bash
+        env:
+          INPUT_REF: ${{ inputs.shared_ref }}
         run: |
           set -euo pipefail
-          INPUT_REF="${{ inputs.shared_ref }}"
-          if [ -n "$INPUT_REF" ]; then
-            REF="$INPUT_REF"
-          else
-            REF="main"
+          REF="${INPUT_REF:-main}"
+          if [ -z "$INPUT_REF" ]; then
             echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
             echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Resolved shared workflows ref: $REF"
-      
-      # Shallow: nothing in this job reads git history, and a full clone of the
-      # caller took ~96 s.
+
+      # Shallow: nothing in this job reads git history.
       - name: Checkout caller repo
         uses: actions/checkout@v7
         with:
@@ -410,780 +403,355 @@ jobs:
           name: api-e2e-${{ github.run_id }}
           path: caller/api-publish
 
-      - name: Apply repository preset configuration
-        id: config
-        run: |
-          # Apply repo-specific presets if provided
-          PRESET="${{ inputs.repo_preset }}"
-          
-          if [ "$PRESET" = "tems" ]; then
-            echo "ℹ️  Applying TEMS preset configuration"
-            # Note: Presets only set ports (not postgres_db or database_port)
-            # Services start before steps run, so they read inputs directly
-            echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
-            echo "api_port=5000" >> $GITHUB_OUTPUT
-            echo "web_port=3000" >> $GITHUB_OUTPUT
-          elif [ "$PRESET" = "ravenxpress" ]; then
-            echo "ℹ️  Applying RavenXpress preset configuration"
-            echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
-            echo "api_port=5100" >> $GITHUB_OUTPUT
-            echo "web_port=3100" >> $GITHUB_OUTPUT
-          else
-            # Use explicit inputs or defaults
-            echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
-            echo "api_port=${{ inputs.api_port }}" >> $GITHUB_OUTPUT
-            echo "web_port=${{ inputs.web_port }}" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Validate Postgres password source
-        run: |
-          # Prevent plaintext real passwords in workflow YAML
-          if [ -z "${{ secrets.POSTGRES_PASSWORD }}" ] && [ "${{ inputs.postgres_password }}" != "test_password_e2e_123" ]; then
-            echo "❌ Do not pass real DB passwords via inputs.postgres_password."
-            echo "   Use secrets.POSTGRES_PASSWORD instead."
-            exit 1
-          fi
-          echo "✅ Postgres password source validated"
-
-      - name: Prepare E2E JWT configuration
-        id: jwt
-        run: |
-          # Use secrets if provided, otherwise generate ephemeral values
-          KEY="${{ secrets.E2E_JWT_SIGNING_KEY }}"
-          if [ -z "$KEY" ]; then
-            KEY=$(openssl rand -base64 48 | tr -d '\n')
-            echo "ℹ️  Generated ephemeral E2E_JWT_SIGNING_KEY for this run"
-          else
-            echo "ℹ️  Using E2E_JWT_SIGNING_KEY from repository secrets"
-          fi
-          echo "signing_key=$KEY" >> $GITHUB_OUTPUT
-          
-          ISSUER="https://e2e-auth-issuer"
-          echo "issuer=$ISSUER" >> $GITHUB_OUTPUT
-          
-          AUD="${{ secrets.E2E_JWT_AUDIENCE }}"
-          if [ -z "$AUD" ]; then
-            AUD="e2e-api"
-            echo "ℹ️  Using default E2E_JWT_AUDIENCE: $AUD"
-          fi
-          echo "audience=$AUD" >> $GITHUB_OUTPUT
-
-      - name: Wait for PostgreSQL
-        env:
-          PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
-        run: |
-          echo "⏳ Waiting for PostgreSQL service on port ${{ steps.config.outputs.database_port }}..."
-          for i in {1..20}; do
-            if pg_isready -h localhost -p ${{ steps.config.outputs.database_port }} -U ${{ inputs.postgres_user }}; then
-              echo "✅ PostgreSQL ready"
-              exit 0
-            fi
-            [ $i -eq 20 ] && echo "❌ PostgreSQL failed to start" && exit 1
-            sleep 2
-          done
-
-      - name: Wait for Azurite (if enabled)
-        if: inputs.enable_azurite == true
-        run: |
-          echo "⏳ Waiting for Azurite service..."
-          for i in {1..15}; do
-            if curl -sf http://127.0.0.1:10000/devstoreaccount1?restype=service&comp=properties >/dev/null 2>&1; then
-              echo "✅ Azurite ready on ports 10000-10002"
-              exit 0
-            fi
-            [ $i -eq 15 ] && echo "❌ Azurite failed to start" && exit 1
-            sleep 1
-          done
-
-      - name: Load E2E environment variables from JSON
-        env:
-          E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
-        run: |
-          # Load additional E2E environment variables before API/web startup so
-          # service processes inherit the same config that tests use.
-          if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
-            echo "📦 Loading additional E2E environment variables..."
-            # Validate JSON syntax
-            if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_env_vars JSON syntax"
-              exit 1
-            fi
-            # Write to temp file, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
-            TEMP_FILE=$(mktemp)
-            echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
-            echo "Loaded environment variable keys:"
-            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
-            while IFS=$'\t' read -r key value; do
-              DELIM="EOF_$(openssl rand -hex 8)"
-              {
-                echo "${key}<<${DELIM}"
-                echo "${value}"
-                echo "${DELIM}"
-              } >> "$GITHUB_ENV"
-            done < "$TEMP_FILE"
-            rm -f "$TEMP_FILE"
-            echo "✅ E2E environment variables loaded"
-          else
-            echo "ℹ️  No additional E2E environment variables to load"
-          fi
-
-      - name: Load E2E secrets from JSON
-        env:
-          E2E_SECRETS_JSON: ${{ secrets.e2e_secrets }}
-        run: |
-          # Load additional E2E secrets before API/web startup so service
-          # processes inherit provider credentials as well as the test runner.
-          if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
-            echo "🔐 Loading additional E2E secrets from JSON..."
-            # Validate JSON syntax
-            if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
-              echo "❌ Error: Invalid e2e_secrets JSON syntax"
-              exit 1
-            fi
-            # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
-            TEMP_FILE=$(mktemp)
-            echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
-            COUNT=$(wc -l < "$TEMP_FILE")
-            echo "Loaded secret keys:"
-            cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
-            while IFS=$'\t' read -r key value; do
-              # Mask secrets: full value first (for single-line), then line-by-line (for multi-line)
-              if [[ "$value" != *$'\n'* ]]; then
-                # Single-line secret: mask the whole value
-                echo "::add-mask::$value"
-              else
-                # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
-                while IFS= read -r line; do
-                  [ -n "$line" ] && echo "::add-mask::$line"
-                done <<< "$value"
-              fi
-              DELIM="EOF_$(openssl rand -hex 8)"
-              {
-                echo "${key}<<${DELIM}"
-                echo "${value}"
-                echo "${DELIM}"
-              } >> "$GITHUB_ENV"
-            done < "$TEMP_FILE"
-            rm -f "$TEMP_FILE"
-            echo "✅ E2E secrets from JSON loaded and masked ($COUNT variables)"
-          else
-            echo "ℹ️  No additional E2E secrets JSON to load"
-          fi
-
-      - name: Normalize E2E runtime environment
-        run: |
-          # Some repos expose provider test credentials under concise secret
-          # names, while the app configuration expects provider-style keys.
-          if [ -n "${PAYSTACK_TEST_SECRET_KEY:-}" ] && [ -z "${Paystack__SecretKey:-}" ]; then
-            echo "::add-mask::$PAYSTACK_TEST_SECRET_KEY"
-            PAYSTACK_DELIM="EOF_PAYSTACK_$(openssl rand -hex 8)"
-            {
-              echo "Paystack__SecretKey<<${PAYSTACK_DELIM}"
-              echo "$PAYSTACK_TEST_SECRET_KEY"
-              echo "${PAYSTACK_DELIM}"
-            } >> "$GITHUB_ENV"
-            echo "✅ Paystack__SecretKey mapped from PAYSTACK_TEST_SECRET_KEY"
-          fi
-
-          if [ "${{ inputs.repo_preset }}" = "ravenxpress" ]; then
-            {
-              echo "Branding__AllowAnonymousUnpublishedPreview=true"
-              echo "RAVENXPRESS_E2E_ENV=local"
-              echo "NEXT_PUBLIC_RAVENXPRESS_E2E_ENV=local"
-              echo "NEXT_PUBLIC_ENABLE_TEST_AUTH_HOOKS=true"
-            } >> "$GITHUB_ENV"
-
-            # RavenXpress refuses v1 payment creation unless the requested
-            # client platform has a registered, server-owned return profile.
-            # Match the local runner's default while preserving an explicit
-            # caller override loaded from e2e_env_vars above.
-            if [[ -z "${MobilePaymentCallbackProfiles__Web//[[:space:]]/}" ]]; then
-              echo "MobilePaymentCallbackProfiles__Web=http://localhost:${{ steps.config.outputs.web_port }}/payments/return" >> "$GITHUB_ENV"
-              echo "✅ RavenXpress web payment return profile configured"
-            else
-              echo "ℹ️  RavenXpress web payment return profile supplied by caller"
-            fi
-
-            echo "✅ RavenXpress local E2E runtime flags enabled"
-          fi
-
-      - name: Configure Graph provisioning environment
-        env:
-          GRAPH_CLIENT_ID: ${{ inputs.graph_client_id }}
-          GRAPH_CLIENT_SECRET: ${{ secrets.graph_client_secret }}
-          GRAPH_API_APP_ID: ${{ inputs.api_app_id }}
-          GRAPH_EXTENSION_APP_ID: ${{ inputs.extension_app_id }}
-          GRAPH_B2C_TENANT_ID: ${{ inputs.b2c_tenant_id }}
-          GRAPH_TENANT_DOMAIN: ${{ inputs.graph_tenant_domain }}
-        run: |
-          # Expose Microsoft Graph provisioning credentials to BOTH the API
-          # (which mints invited B2C identities on signup approval / user invite)
-          # and the E2E test runner (whose B2C cleanup hook resolves and deletes
-          # exactly those identities afterward). Writing to GITHUB_ENV makes them
-          # job-wide, so they survive into every later step — the API process and
-          # the dotnet test process alike.
-          #
-          # The API reads the nested Auth:B2C:* keys (Auth__B2C__* in env form);
-          # the cleanup hook reads the same keys via its config fallback, so this
-          # single export covers provisioning + teardown.
-          if [ -z "$GRAPH_CLIENT_SECRET" ] || [ -z "$GRAPH_CLIENT_ID" ] || [ -z "$GRAPH_B2C_TENANT_ID" ]; then
-            echo "ℹ️  Graph provisioning not configured (need graph_client_id + graph_client_secret + b2c_tenant_id) — invite/approval scenarios will self-skip unless E2E_REQUIRE_GRAPH forces a failure."
-            exit 0
-          fi
-          echo "::add-mask::$GRAPH_CLIENT_SECRET"
-          GRAPH_DELIM="EOF_GRAPH_$(openssl rand -hex 8)"
-          {
-            echo "Auth__B2C__GraphClientId=$GRAPH_CLIENT_ID"
-            echo "Auth__B2C__GraphClientSecret<<${GRAPH_DELIM}"
-            echo "$GRAPH_CLIENT_SECRET"
-            echo "${GRAPH_DELIM}"
-            echo "Auth__B2C__TenantId=$GRAPH_B2C_TENANT_ID"
-            [ -n "$GRAPH_TENANT_DOMAIN" ] && echo "Auth__B2C__GraphTenantDomain=$GRAPH_TENANT_DOMAIN"
-            [ -n "$GRAPH_API_APP_ID" ] && echo "Auth__B2C__ApiAppId=$GRAPH_API_APP_ID"
-            [ -n "$GRAPH_EXTENSION_APP_ID" ] && echo "Auth__B2C__ExtensionAppId=$GRAPH_EXTENSION_APP_ID"
-          } >> "$GITHUB_ENV"
-          # The cleanup hook resolves registered emails -> OIDs against the test
-          # database; the API step sets the connection string in its own scope,
-          # so expose it job-wide here too for the dotnet test process.
-          echo "ConnectionStrings__Postgres=Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${POSTGRES_PASSWORD}" >> "$GITHUB_ENV"
-          echo "✅ Graph provisioning env exported (API provisioning + B2C cleanup)"
-
-      - name: Start API server
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-          ASPNETCORE_URLS: http://0.0.0.0:${{ steps.config.outputs.api_port }}
-          SkipDatabaseMigrations: "false"
-          ENABLE_TEST_MIGRATIONS: "true"
-          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
-          E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
-          E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
-          Auth__Issuer: ${{ steps.jwt.outputs.issuer }}
-          Auth__Audience: ${{ steps.jwt.outputs.audience }}
-          AzureStorage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-          DEDICATED_GOOGLE_MAPS_SERVER_KEY: ${{ secrets.google_maps_platform_server_api_key }}
-        run: |
-          # Prefer the typed reusable-workflow secret without putting it in
-          # GITHUB_ENV. If a caller already supplies the provider setting through
-          # e2e_secrets, retain that backwards-compatible job environment value.
-          if [ -n "$DEDICATED_GOOGLE_MAPS_SERVER_KEY" ]; then
-            echo "::add-mask::$DEDICATED_GOOGLE_MAPS_SERVER_KEY"
-            export GoogleMapsPlatform__Enabled=true
-            export GoogleMapsPlatform__ServerApiKey="$DEDICATED_GOOGLE_MAPS_SERVER_KEY"
-            echo "✅ Google Maps server credential configured from the dedicated secret"
-          elif [ -n "${GoogleMapsPlatform__ServerApiKey:-}" ]; then
-            echo "::add-mask::$GoogleMapsPlatform__ServerApiKey"
-            export GoogleMapsPlatform__Enabled=true
-            echo "✅ Google Maps server credential retained from e2e_secrets"
-          else
-            export GoogleMapsPlatform__Enabled=false
-            unset GoogleMapsPlatform__ServerApiKey
-            echo "ℹ️  Google Maps server credential not configured; provider-backed routes remain disabled"
-          fi
-
-          echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
-          
-          # Remove appsettings files to prevent connection string conflicts
-          rm -f api-publish/appsettings.*.json
-          echo "ℹ️  Removed appsettings files - using environment variables only"
-          
-          # Find API entry point (prefer .dll for framework-dependent, fallback to executable).
-          # Derive the entry assembly from the api_project name so we never guess wrong when the
-          # publish output also contains a referenced executable that ships its own
-          # *.runtimeconfig.json (e.g. a Worker service referenced by the API — the old
-          # `find ... | head -n1` picked whichever the filesystem returned first, which was
-          # non-deterministic and could start the wrong process). Fall back to the legacy
-          # heuristics for callers whose published assembly name differs from the .csproj name.
-          API_PROJECT_NAME="$(basename "${{ inputs.api_project }}" .csproj)"
-          if [ -f "api-publish/${API_PROJECT_NAME}.dll" ]; then
-            API_DLL="api-publish/${API_PROJECT_NAME}.dll"
-          else
-            # Legacy fallback: first assembly with a matching .runtimeconfig.json, then *.Api.dll.
-            API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.runtimeconfig.json" | sed 's/\.runtimeconfig\.json$/.dll/' | head -n1)
-            if [ ! -f "$API_DLL" ]; then
-              API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.Api.dll" | head -n1)
-            fi
-          fi
-          API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
-          
-          # Start API in background
-          cd api-publish
-          if [ -n "$API_DLL" ]; then
-            echo "ℹ️  Starting framework-dependent API: dotnet ${API_DLL##*/}"
-            dotnet "${API_DLL##*/}" > ../api.log 2>&1 &
-            API_PID=$!
-          elif [ -n "$API_BINARY" ]; then
-            echo "ℹ️  Starting self-contained API: ${API_BINARY##*/}"
-            chmod +x "$API_BINARY"
-            "./${API_BINARY##*/}" > ../api.log 2>&1 &
-            API_PID=$!
-          else
-            echo "❌ No API entry point found in api-publish/"
-            ls -la .
-            exit 1
-          fi
-          cd ..
-          echo "API_PID=$API_PID" >> $GITHUB_ENV
-          echo "ℹ️  API process started (PID: $API_PID)"
-          
-          # Wait for API health endpoint
-          echo "⏳ Waiting for API to be ready..."
-          for i in {1..60}; do
-            if curl -sf http://localhost:${{ steps.config.outputs.api_port }}/healthz >/dev/null 2>&1 || \
-               curl -sf http://localhost:${{ steps.config.outputs.api_port }}/health >/dev/null 2>&1; then
-              echo "✅ API ready on http://localhost:${{ steps.config.outputs.api_port }}"
-              exit 0
-            fi
-            
-            # Check if process is still alive
-            if ! kill -0 $API_PID 2>/dev/null; then
-              echo "❌ API process died during startup"
-              echo "--- API logs (last 50 lines) ---"
-              tail -n 50 api.log || true
-              exit 1
-            fi
-            
-            [ $i -eq 60 ] && echo "❌ API failed to respond after 60 seconds" && tail -n 50 api.log && exit 1
-            sleep 1
-          done
-
-      - name: Wait for migrations to complete
-        run: |
-          echo "⏳ Waiting for EF migrations to complete..."
-          sleep 5
-          
-          # Verify critical tables exist
-          for i in {1..15}; do
-            TABLE_COUNT=$(PGPASSWORD=${{ env.POSTGRES_PASSWORD }} psql -h localhost -p ${{ steps.config.outputs.database_port }} \
-              -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }} -t -A -q \
-              -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>&1)
-            
-            if [ "$TABLE_COUNT" -gt 0 ]; then
-              echo "✅ Database schema initialized ($TABLE_COUNT tables found)"
-              exit 0
-            fi
-            
-            [ $i -eq 15 ] && echo "❌ No tables found after 15 seconds" && exit 1
-            sleep 1
-          done
-
-      - name: Seed test data
-        if: inputs.seed_data_script != ''
-        env:
-          PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
-        run: |
-          echo "📦 Seeding test data from ${{ inputs.seed_data_script }}..."
-          if [ ! -f "${{ inputs.seed_data_script }}" ]; then
-            echo "❌ Seed data script not found: ${{ inputs.seed_data_script }}"
-            exit 1
-          fi
-          
-          psql -h localhost -p ${{ steps.config.outputs.database_port }} \
-            -U ${{ inputs.postgres_user }} \
-            -d ${{ inputs.postgres_db }} \
-            -f "${{ inputs.seed_data_script }}"
-          
-          echo "✅ Test data seeded successfully"
-
-      - name: Install web dependencies
-        working-directory: caller/${{ inputs.web_directory }}
-        run: |
-          echo "📦 Installing web dependencies..."
-          if [ -f "package-lock.json" ]; then
-            npm ci
-          else
-            npm install
-          fi
-
-      - name: Install Playwright browsers
-        if: inputs.run_playwright_tests == true && matrix.playwright
-        working-directory: caller/${{ inputs.web_directory }}
-        run: |
-          echo "📦 Installing Playwright browsers..."
-          npx playwright install --with-deps chromium
-
-      - name: Build Next.js app
-        working-directory: caller/${{ inputs.web_directory }}
-        env:
-          API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
-          NEXT_PUBLIC_API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
-          NEXT_PUBLIC_TEST_MOCK_MSAL: "true"
-          NEXT_PUBLIC_E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
-          NEXT_PUBLIC_E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
-          NEXT_PUBLIC_E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
-          NEXT_PUBLIC_VERSION: e2e-test
-          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
-        run: |
-          echo "🏗️  Building Next.js app..."
-          npm run build
-
-      - name: Start Next.js server
-        working-directory: caller/${{ inputs.web_directory }}
-        env:
-          API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
-          NEXT_PUBLIC_API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
-          NEXT_PUBLIC_TEST_MOCK_MSAL: "true"
-          NEXT_PUBLIC_E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
-          NEXT_PUBLIC_E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
-          NEXT_PUBLIC_E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
-          NODE_ENV: production
-          PORT: ${{ steps.config.outputs.web_port }}
-        run: |
-          echo "🚀 Starting Next.js server on port ${{ steps.config.outputs.web_port }}..."
-          npm run start > ../web.log 2>&1 &
-          WEB_PID=$!
-          echo "WEB_PID=$WEB_PID" >> $GITHUB_ENV
-          echo "ℹ️  Next.js process started (PID: $WEB_PID)"
-          
-          # Wait for web server readiness
-          echo "⏳ Waiting for Next.js to be ready..."
-          for i in {1..60}; do
-            if curl -sf http://localhost:${{ steps.config.outputs.web_port }}/healthz >/dev/null 2>&1 || \
-               curl -sf http://localhost:${{ steps.config.outputs.web_port }} >/dev/null 2>&1; then
-              echo "✅ Next.js ready on http://localhost:${{ steps.config.outputs.web_port }}"
-              exit 0
-            fi
-            
-            # Check if process is still alive
-            if ! kill -0 $WEB_PID 2>/dev/null; then
-              echo "❌ Next.js process died during startup"
-              echo "--- Web logs (last 50 lines) ---"
-              tail -n 50 ../web.log || true
-              exit 1
-            fi
-            
-            [ $i -eq 60 ] && echo "❌ Next.js failed to respond after 60 seconds" && tail -n 50 ../web.log && exit 1
-            sleep 1
-          done
-
-      - name: Verify services health
-        run: |
-          echo "🔍 Verifying all services are healthy..."
-          
-          # API health check
-          API_HEALTH=$(curl -sf http://localhost:${{ steps.config.outputs.api_port }}/healthz || curl -sf http://localhost:${{ steps.config.outputs.api_port }}/health || echo "failed")
-          if [[ "$API_HEALTH" == *"Healthy"* ]] || [[ "$API_HEALTH" == *"healthy"* ]] || [[ "$API_HEALTH" != "failed" ]]; then
-            echo "✅ API is healthy"
-          else
-            echo "❌ API health check failed: $API_HEALTH"
-            exit 1
-          fi
-          
-          # Web health check
-          WEB_HEALTH=$(curl -sf http://localhost:${{ steps.config.outputs.web_port }}/healthz || curl -sf http://localhost:${{ steps.config.outputs.web_port }} || echo "failed")
-          if [[ "$WEB_HEALTH" != "failed" ]]; then
-            echo "✅ Web is healthy"
-          else
-            echo "❌ Web health check failed"
-            exit 1
-          fi
-      
-      - name: Prepare Reqnroll E2E tests
-        id: filter-prep
-        if: inputs.e2e_project != '' && matrix.reqnroll
-        run: |
-          echo "🧪 Preparing Reqnroll/SpecFlow E2E tests..."
-          echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
-          
-          # Log B2C configuration source (helps debug fallback paths without leaking secrets)
-          echo "🔐 B2C Configuration:"
-          if [ -n "${{ inputs.b2c_authority }}" ]; then
-            echo "  ✅ B2C_AUTHORITY from inputs.b2c_authority"
-          elif [ -n "${{ secrets.AAD_B2C_AUTHORITY }}" ]; then
-            echo "  📖 B2C_AUTHORITY from legacy secrets.AAD_B2C_AUTHORITY"
-          else
-            echo "  ⚠️ B2C_AUTHORITY not configured"
-          fi
-          
-          if [ -n "${{ inputs.b2c_client_id }}" ]; then
-            echo "  ✅ B2C_CLIENT_ID from inputs.b2c_client_id"
-          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_ID }}" ]; then
-            echo "  📖 B2C_CLIENT_ID from legacy secrets.B2C_SMOKE_CLIENT_ID"
-          else
-            echo "  ⚠️ B2C_CLIENT_ID not configured"
-          fi
-          
-          if [ -n "${{ inputs.b2c_scope }}" ]; then
-            echo "  ✅ B2C_SCOPE from inputs.b2c_scope"
-          elif [ -n "${{ secrets.AAD_B2C_API_SCOPE }}" ]; then
-            echo "  📖 B2C_SCOPE from legacy secrets.AAD_B2C_API_SCOPE"
-          else
-            echo "  ⚠️ B2C_SCOPE not configured"
-          fi
-          
-          if [ -n "${{ secrets.b2c_client_secret }}" ]; then
-            echo "  ✅ B2C_CLIENT_SECRET from secrets.b2c_client_secret"
-          elif [ -n "${{ secrets.B2C_SMOKE_CLIENT_SECRET }}" ]; then
-            echo "  📖 B2C_CLIENT_SECRET from legacy secrets.B2C_SMOKE_CLIENT_SECRET"
-          else
-            echo "  ⚠️ B2C_CLIENT_SECRET not configured"
-          fi
-          
-          # Determine test filter - Reqnroll tags (e.g., @smoke) become NUnit categories (without @)
-          if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
-            FILTER="smoke"
-            echo "ℹ️  Running smoke tests only (filter: Category=smoke)"
-          elif [ -n "${{ inputs.test_filter }}" ]; then
-            # Remove @ prefix if present (Gherkin tags use @, NUnit categories don't)
-            FILTER="${{ inputs.test_filter }}"
-            FILTER="${FILTER#@}"
-            echo "ℹ️  Running tests with filter: Category=$FILTER"
-          else
-            FILTER=""
-            echo "ℹ️  Running all E2E tests (no filter)"
-          fi
-          
-          # Build test project first to generate Playwright install script
-          echo "🏗️  Building E2E test project..."
-          dotnet build ${{ inputs.e2e_project }} -c Release --nologo
-          
-          # Install Playwright browsers for .NET (if using Microsoft.Playwright)
-          PLAYWRIGHT_SCRIPT=$(find . -path "*/bin/Release/*/playwright.ps1" | head -n1)
-          if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
-            echo "📦 Installing Playwright browsers for .NET..."
-            pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
-          fi
-          
-          # Output filter for next step
-          if [ -n "$FILTER" ]; then
-            echo "filter=Category=$FILTER" >> $GITHUB_OUTPUT
-          else
-            echo "filter=" >> $GITHUB_OUTPUT
-          fi
+      - name: Start the stack (database, API, web)
+        id: stack
+        uses: ./shared/.github/actions/e2e-start-stack
+        with:
+          repo_preset: ${{ inputs.repo_preset }}
+          database_port: ${{ inputs.database_port }}
+          api_port: ${{ inputs.api_port }}
+          web_port: ${{ inputs.web_port }}
+          postgres_user: ${{ inputs.postgres_user }}
+          postgres_db: ${{ inputs.postgres_db }}
+          postgres_password_input: ${{ inputs.postgres_password }}
+          postgres_password_secret: ${{ secrets.POSTGRES_PASSWORD }}
+          e2e_jwt_signing_key: ${{ secrets.E2E_JWT_SIGNING_KEY }}
+          e2e_jwt_audience: ${{ secrets.E2E_JWT_AUDIENCE }}
+          enable_azurite: ${{ inputs.enable_azurite }}
+          e2e_env_vars: ${{ inputs.e2e_env_vars }}
+          e2e_secrets: ${{ secrets.e2e_secrets }}
+          graph_client_id: ${{ inputs.graph_client_id }}
+          graph_client_secret: ${{ secrets.graph_client_secret }}
+          api_app_id: ${{ inputs.api_app_id }}
+          extension_app_id: ${{ inputs.extension_app_id }}
+          b2c_tenant_id: ${{ inputs.b2c_tenant_id }}
+          graph_tenant_domain: ${{ inputs.graph_tenant_domain }}
+          google_maps_platform_server_api_key: ${{ secrets.google_maps_platform_server_api_key }}
+          api_project: ${{ inputs.api_project }}
+          seed_data_script: ${{ inputs.seed_data_script }}
+          web_directory: ${{ inputs.web_directory }}
 
       - name: Run Reqnroll E2E tests
-        if: inputs.e2e_project != '' && matrix.reqnroll
-        uses: ./shared/.github/actions/dotnet-test-retry
-        env:
-          RUN_E2E: "true"
-          # CI runs API/DB locally — ensure all E2E components use local auth (JWT) not B2C
-          RAVENXPRESS_E2E_ENV: "local"
-          E2E_BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
-          E2E_API_BASE_URL: http://localhost:${{ steps.config.outputs.api_port }}
-          E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
-          E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
-          E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
-          E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
-          E2E_HEADLESS: "true"
-          E2E_SLOWMO: "0"
-          E2E_ENABLE_VIDEO: ${{ inputs.e2e_enable_video && 'true' || 'false' }}
-          # B2C Configuration (with backwards compatibility for legacy secret names)
-          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
-          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
-          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
-          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          # Additional E2E env vars and secrets loaded from JSON in previous steps
+        if: inputs.e2e_project != ''
+        uses: ./shared/.github/actions/e2e-run-reqnroll
         with:
-          project: caller/${{ inputs.e2e_project }}
-          filter: ${{ steps.filter-prep.outputs.filter }}
-          max-attempts: ${{ inputs.e2e_retry_attempts }}
-          results-directory: ./TestResults
-          configuration: Release
-          no-build: true
-          console-verbosity: ${{ inputs.console_verbosity }}
-          trx-filename-prefix: e2e-attempt
+          e2e_project: ${{ inputs.e2e_project }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          test_filter: ${{ inputs.test_filter }}
+          retry_attempts: ${{ inputs.e2e_retry_attempts }}
+          console_verbosity: ${{ inputs.console_verbosity }}
+          enable_video: ${{ inputs.e2e_enable_video }}
+          database_port: ${{ steps.stack.outputs.database_port }}
+          api_port: ${{ steps.stack.outputs.api_port }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          postgres_user: ${{ inputs.postgres_user }}
+          postgres_db: ${{ inputs.postgres_db }}
+          jwt_signing_key: ${{ steps.stack.outputs.jwt_signing_key }}
+          jwt_issuer: ${{ steps.stack.outputs.jwt_issuer }}
+          jwt_audience: ${{ steps.stack.outputs.jwt_audience }}
+          b2c_authority: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          b2c_client_id: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          b2c_scope: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          b2c_client_secret: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
 
       - name: Run Playwright tests
-        if: inputs.run_playwright_tests == true && matrix.playwright
-        working-directory: caller/${{ inputs.web_directory }}
+        if: inputs.run_playwright_tests == true
+        uses: ./shared/.github/actions/e2e-run-playwright
+        with:
+          web_directory: ${{ inputs.web_directory }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          max_failures: ${{ inputs.playwright_max_failures }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          smoke_config: ${{ inputs.playwright_smoke_config }}
+          b2c_authority: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          b2c_client_id: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          b2c_scope: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          b2c_client_secret: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+
+      - name: Stop the stack
+        if: always()
+        uses: ./shared/.github/actions/e2e-stop-stack
+        with:
+          job_status: ${{ job.status }}
+          api_port: ${{ steps.stack.outputs.api_port }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          suite: ${{ inputs.e2e_project != '' && inputs.run_playwright_tests && 'Reqnroll, then Playwright' || (inputs.e2e_project != '' && 'Reqnroll' || 'Playwright') }}
+          repo_preset: ${{ inputs.repo_preset }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          test_filter: ${{ inputs.test_filter }}
+          ran_playwright: ${{ inputs.run_playwright_tests }}
+          ran_reqnroll: ${{ inputs.e2e_project != '' }}
+          web_directory: ${{ inputs.web_directory }}
+          enable_video: ${{ inputs.e2e_enable_video }}
+
+  # parallel_suites on: the Reqnroll suite in its own job.
+  e2e-reqnroll:
+    name: E2E Tests (reqnroll)
+    if: needs.plan-e2e.outputs.mode == 'parallel' && needs.plan-e2e.outputs.run_reqnroll == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    needs: [build-api, plan-e2e]
+    services:
+      postgres:
+        image: postgres:15-alpine
         env:
-          BASE_URL: http://localhost:${{ steps.config.outputs.web_port }}
-          START_WEB_SERVER: "false"
-          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
-          PLAYWRIGHT_MAX_FAILURES: ${{ inputs.playwright_max_failures }}
-          # B2C Configuration (with backwards compatibility for legacy secret names)
-          B2C_AUTHORITY: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
-          B2C_CLIENT_ID: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
-          B2C_SCOPE: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
-          B2C_CLIENT_SECRET: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
-          # Additional E2E env vars and secrets loaded in previous steps
+          POSTGRES_USER: ${{ inputs.postgres_user }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+        ports:
+          - ${{ inputs.database_port || 5432 }}:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:latest
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+    steps:
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.shared_ref }}
         run: |
-          echo "🧪 Running Playwright tests..."
-          PLAYWRIGHT_ARGS=()
-          if [ -n "$PLAYWRIGHT_SHARD" ]; then
-            PLAYWRIGHT_ARGS+=(--shard="$PLAYWRIGHT_SHARD")
-            echo "ℹ️  Shard $PLAYWRIGHT_SHARD"
+          set -euo pipefail
+          REF="${INPUT_REF:-main}"
+          if [ -z "$INPUT_REF" ]; then
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
           fi
-          # A broken build fails every test, each on every retry, each only after its timeout: stop early instead.
-          if [ "${PLAYWRIGHT_MAX_FAILURES:-0}" -gt 0 ]; then
-            PLAYWRIGHT_ARGS+=(--max-failures="$PLAYWRIGHT_MAX_FAILURES")
-            echo "ℹ️  Stops once $PLAYWRIGHT_MAX_FAILURES tests are still failing after their retries"
-          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
 
-          if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
-            echo "ℹ️  Running smoke tests only..."
-            if [ -n "${{ inputs.playwright_smoke_config }}" ]; then
-              echo "   Config: ${{ inputs.playwright_smoke_config }}"
-              npx playwright test --config=${{ inputs.playwright_smoke_config }} --reporter=list "${PLAYWRIGHT_ARGS[@]}"
-            else
-              echo "⚠️  No playwright_smoke_config provided, running tests with @smoke tag..."
-              npx playwright test --grep @smoke --reporter=list "${PLAYWRIGHT_ARGS[@]}"
-            fi
-          else
-            echo "ℹ️  Running all Playwright tests..."
-            npx playwright test --reporter=list "${PLAYWRIGHT_ARGS[@]}"
-          fi
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
 
-      - name: Capture diagnostic logs on failure
-        if: failure()
-        working-directory: .
-        run: |
-          echo "📋 Capturing diagnostic information..."
-          echo ""
-          
-          # Check process status
-          echo "=== Process Status ==="
-          if kill -0 $API_PID 2>/dev/null; then
-            echo "✅ API process still running (PID: $API_PID)"
-          else
-            echo "❌ API process died (PID: $API_PID)"
-          fi
-          
-          if kill -0 $WEB_PID 2>/dev/null; then
-            echo "✅ Web process still running (PID: $WEB_PID)"
-          else
-            echo "❌ Web process died (PID: $WEB_PID)"
-          fi
-          echo ""
-          
-          # Test endpoints
-          echo "=== Endpoint Tests ==="
-          curl -v http://localhost:${{ steps.config.outputs.api_port }}/healthz 2>&1 || echo "API health endpoint failed"
-          echo ""
-          curl -v http://localhost:${{ steps.config.outputs.web_port }}/healthz 2>&1 || echo "Web health endpoint failed"
-          echo ""
-          
-          # Show logs
-          echo "=== API Logs (last 100 lines) ==="
-          tail -n 100 caller/api.log 2>/dev/null || echo "No API logs found"
-          echo ""
-          
-          echo "=== Web Logs (last 100 lines) ==="
-          tail -n 100 caller/web.log 2>/dev/null || echo "No web logs found"
+      - name: Checkout shared workflows repo
+        uses: actions/checkout@v7
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          path: shared
 
-      - name: Cleanup background processes
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Setup .NET (for running API and E2E tests)
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download API artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: api-e2e-${{ github.run_id }}
+          path: caller/api-publish
+
+      - name: Start the stack (database, API, web)
+        id: stack
+        uses: ./shared/.github/actions/e2e-start-stack
+        with:
+          repo_preset: ${{ inputs.repo_preset }}
+          database_port: ${{ inputs.database_port }}
+          api_port: ${{ inputs.api_port }}
+          web_port: ${{ inputs.web_port }}
+          postgres_user: ${{ inputs.postgres_user }}
+          postgres_db: ${{ inputs.postgres_db }}
+          postgres_password_input: ${{ inputs.postgres_password }}
+          postgres_password_secret: ${{ secrets.POSTGRES_PASSWORD }}
+          e2e_jwt_signing_key: ${{ secrets.E2E_JWT_SIGNING_KEY }}
+          e2e_jwt_audience: ${{ secrets.E2E_JWT_AUDIENCE }}
+          enable_azurite: ${{ inputs.enable_azurite }}
+          e2e_env_vars: ${{ inputs.e2e_env_vars }}
+          e2e_secrets: ${{ secrets.e2e_secrets }}
+          graph_client_id: ${{ inputs.graph_client_id }}
+          graph_client_secret: ${{ secrets.graph_client_secret }}
+          api_app_id: ${{ inputs.api_app_id }}
+          extension_app_id: ${{ inputs.extension_app_id }}
+          b2c_tenant_id: ${{ inputs.b2c_tenant_id }}
+          graph_tenant_domain: ${{ inputs.graph_tenant_domain }}
+          google_maps_platform_server_api_key: ${{ secrets.google_maps_platform_server_api_key }}
+          api_project: ${{ inputs.api_project }}
+          seed_data_script: ${{ inputs.seed_data_script }}
+          web_directory: ${{ inputs.web_directory }}
+
+      - name: Run Reqnroll E2E tests
+        uses: ./shared/.github/actions/e2e-run-reqnroll
+        with:
+          e2e_project: ${{ inputs.e2e_project }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          test_filter: ${{ inputs.test_filter }}
+          retry_attempts: ${{ inputs.e2e_retry_attempts }}
+          console_verbosity: ${{ inputs.console_verbosity }}
+          enable_video: ${{ inputs.e2e_enable_video }}
+          database_port: ${{ steps.stack.outputs.database_port }}
+          api_port: ${{ steps.stack.outputs.api_port }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          postgres_user: ${{ inputs.postgres_user }}
+          postgres_db: ${{ inputs.postgres_db }}
+          jwt_signing_key: ${{ steps.stack.outputs.jwt_signing_key }}
+          jwt_issuer: ${{ steps.stack.outputs.jwt_issuer }}
+          jwt_audience: ${{ steps.stack.outputs.jwt_audience }}
+          b2c_authority: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          b2c_client_id: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          b2c_scope: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          b2c_client_secret: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          artifact_suffix: -reqnroll
+
+      - name: Stop the stack
         if: always()
+        uses: ./shared/.github/actions/e2e-stop-stack
+        with:
+          job_status: ${{ job.status }}
+          api_port: ${{ steps.stack.outputs.api_port }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          artifact_suffix: -reqnroll
+          suite: Reqnroll
+          repo_preset: ${{ inputs.repo_preset }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          test_filter: ${{ inputs.test_filter }}
+          ran_reqnroll: 'true'
+          enable_video: ${{ inputs.e2e_enable_video }}
+
+  # parallel_suites on: the Playwright suite in its own job, one per shard.
+  e2e-playwright:
+    name: E2E Tests (${{ matrix.leg }})
+    if: needs.plan-e2e.outputs.mode == 'parallel' && needs.plan-e2e.outputs.playwright_legs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    needs: [build-api, plan-e2e]
+    strategy:
+      # Let every shard finish so one failing shard does not hide another's failures.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan-e2e.outputs.playwright_legs) }}
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ${{ inputs.postgres_user }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ inputs.postgres_db }}
+        ports:
+          - ${{ inputs.database_port || 5432 }}:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:latest
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+    steps:
+      - name: Resolve shared workflows ref
+        id: wfref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.shared_ref }}
         run: |
-          echo "🧹 Cleaning up background processes..."
-          kill $WEB_PID 2>/dev/null || true
-          kill $API_PID 2>/dev/null || true
-          sleep 2
+          set -euo pipefail
+          REF="${INPUT_REF:-main}"
+          if [ -z "$INPUT_REF" ]; then
+            echo "### ⚠️ shared_ref not provided" >> "$GITHUB_STEP_SUMMARY"
+            echo "Defaulting shared checkout to 'main'. For version-locked runs, pass inputs.shared_ref matching the @ref used in the caller." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved shared workflows ref: $REF"
 
-      - name: Upload Playwright artifacts
-        if: always() && inputs.run_playwright_tests == true && matrix.playwright
-        uses: actions/upload-artifact@v7
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
         with:
-          name: playwright-e2e-${{ github.run_number }}${{ matrix.suffix }}
-          path: |
-            caller/${{ inputs.web_directory }}/playwright-report/**
-            caller/${{ inputs.web_directory }}/test-results/**
-          if-no-files-found: ignore
-          retention-days: 7
+          ref: ${{ inputs.git_ref || github.ref }}
+          path: caller
 
-      - name: Upload Reqnroll screenshots
-        if: always() && inputs.e2e_project != '' && matrix.reqnroll
-        uses: actions/upload-artifact@v7
+      - name: Checkout shared workflows repo
+        uses: actions/checkout@v7
         with:
-          name: reqnroll-screenshots-${{ github.run_number }}${{ matrix.suffix }}
-          path: |
-            caller/**/Screenshot/**
-            caller/**/Screenshots/**
-          if-no-files-found: ignore
-          retention-days: 7
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ steps.wfref.outputs.ref }}
+          path: shared
 
-      - name: Upload Reqnroll videos
-        if: always() && inputs.e2e_project != '' && inputs.e2e_enable_video == true && matrix.reqnroll
-        uses: actions/upload-artifact@v7
+      - name: Setup Node
+        uses: actions/setup-node@v6
         with:
-          name: reqnroll-videos-${{ github.run_number }}${{ matrix.suffix }}
-          path: |
-            caller/**/videos/**
-            caller/**/Videos/**
-          if-no-files-found: ignore
-          retention-days: 3
+          node-version: ${{ inputs.node_version }}
 
-      - name: Upload Reqnroll test results
-        if: always() && inputs.e2e_project != '' && matrix.reqnroll
-        uses: actions/upload-artifact@v7
+      - name: Setup .NET (for running the API)
+        uses: actions/setup-dotnet@v5
         with:
-          name: reqnroll-results-${{ github.run_number }}${{ matrix.suffix }}
-          path: |
-            TestResults/**
-            caller/**/TestResults/**
-            e2e-attempt-*.trx
-            caller/**/e2e-attempt-*.trx
-          if-no-files-found: ignore
-          retention-days: 7
+          dotnet-version: '10.0.x'
 
-      - name: Upload diagnostic logs
-        if: failure()
-        uses: actions/upload-artifact@v7
+      - name: Download API artifact
+        uses: actions/download-artifact@v8
         with:
-          name: e2e-diagnostic-logs-${{ github.run_number }}${{ matrix.suffix }}
-          path: |
-            caller/api.log
-            caller/web.log
-          if-no-files-found: ignore
-          retention-days: 7
+          name: api-e2e-${{ github.run_id }}
+          path: caller/api-publish
 
-      - name: Generate test summary
+      - name: Start the stack (database, API, web)
+        id: stack
+        uses: ./shared/.github/actions/e2e-start-stack
+        with:
+          repo_preset: ${{ inputs.repo_preset }}
+          database_port: ${{ inputs.database_port }}
+          api_port: ${{ inputs.api_port }}
+          web_port: ${{ inputs.web_port }}
+          postgres_user: ${{ inputs.postgres_user }}
+          postgres_db: ${{ inputs.postgres_db }}
+          postgres_password_input: ${{ inputs.postgres_password }}
+          postgres_password_secret: ${{ secrets.POSTGRES_PASSWORD }}
+          e2e_jwt_signing_key: ${{ secrets.E2E_JWT_SIGNING_KEY }}
+          e2e_jwt_audience: ${{ secrets.E2E_JWT_AUDIENCE }}
+          enable_azurite: ${{ inputs.enable_azurite }}
+          e2e_env_vars: ${{ inputs.e2e_env_vars }}
+          e2e_secrets: ${{ secrets.e2e_secrets }}
+          graph_client_id: ${{ inputs.graph_client_id }}
+          graph_client_secret: ${{ secrets.graph_client_secret }}
+          api_app_id: ${{ inputs.api_app_id }}
+          extension_app_id: ${{ inputs.extension_app_id }}
+          b2c_tenant_id: ${{ inputs.b2c_tenant_id }}
+          graph_tenant_domain: ${{ inputs.graph_tenant_domain }}
+          google_maps_platform_server_api_key: ${{ secrets.google_maps_platform_server_api_key }}
+          api_project: ${{ inputs.api_project }}
+          seed_data_script: ${{ inputs.seed_data_script }}
+          web_directory: ${{ inputs.web_directory }}
+
+      - name: Run Playwright tests
+        uses: ./shared/.github/actions/e2e-run-playwright
+        with:
+          web_directory: ${{ inputs.web_directory }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          shard: ${{ matrix.shard }}
+          max_failures: ${{ inputs.playwright_max_failures }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          smoke_config: ${{ inputs.playwright_smoke_config }}
+          b2c_authority: ${{ inputs.b2c_authority != '' && inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY }}
+          b2c_client_id: ${{ inputs.b2c_client_id != '' && inputs.b2c_client_id || secrets.B2C_SMOKE_CLIENT_ID }}
+          b2c_scope: ${{ inputs.b2c_scope != '' && inputs.b2c_scope || secrets.AAD_B2C_API_SCOPE }}
+          b2c_client_secret: ${{ secrets.b2c_client_secret != '' && secrets.b2c_client_secret || secrets.B2C_SMOKE_CLIENT_SECRET }}
+          artifact_suffix: ${{ matrix.suffix }}
+
+      - name: Stop the stack
         if: always()
-        working-directory: .
-        run: |
-          echo "## 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Leg: ${{ matrix.leg }}${{ matrix.shard != '' && format(' (shard {0})', matrix.shard) || '' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Preset: ${{ inputs.repo_preset || 'none (using explicit inputs)' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- API: http://localhost:${{ steps.config.outputs.api_port }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Web: http://localhost:${{ steps.config.outputs.web_port }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Mode: ${{ inputs.run_smoke_only && 'Smoke tests only' || 'Full test suite' }}" >> $GITHUB_STEP_SUMMARY
-          if [ -n "${{ inputs.test_filter }}" ]; then
-            echo "- Filter: \`${{ inputs.test_filter }}\`" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Check for retry attempts
-          ATTEMPT_COUNT=$(find caller -name "e2e-attempt-*.trx" 2>/dev/null | wc -l || echo 0)
-          if [ "$ATTEMPT_COUNT" -gt 1 ]; then
-            echo "🔄 **Test Retry Information**: $ATTEMPT_COUNT attempt(s) executed" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Count artifacts
-          if [ "${{ inputs.run_playwright_tests && matrix.playwright }}" = "true" ]; then
-            PLAYWRIGHT_FAILURES=$(find caller/${{ inputs.web_directory }}/test-results -name "*.png" 2>/dev/null | wc -l || echo 0)
-            if [ "$PLAYWRIGHT_FAILURES" -gt 0 ]; then
-              echo "⚠️ **Playwright**: $PLAYWRIGHT_FAILURES failure screenshot(s)" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
-          
-          if [ -n "${{ inputs.e2e_project }}" ] && [ "${{ matrix.reqnroll }}" = "true" ]; then
-            REQNROLL_SCREENSHOTS=$(find caller -path "*/Screenshot/*.png" 2>/dev/null | wc -l || echo 0)
-            if [ "$REQNROLL_SCREENSHOTS" -gt 0 ]; then
-              echo "⚠️ **Reqnroll**: $REQNROLL_SCREENSHOTS failure screenshot(s)" >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            if [ "${{ inputs.e2e_enable_video }}" = "true" ]; then
-              VIDEO_COUNT=$(find caller -path "*/videos/*.webm" 2>/dev/null | wc -l || echo 0)
-              if [ "$VIDEO_COUNT" -gt 0 ]; then
-                echo "📹 **Videos**: $VIDEO_COUNT recording(s) captured" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.run_playwright_tests && matrix.playwright }}" = "true" ]; then
-            echo "- \`playwright-e2e-${{ github.run_number }}${{ matrix.suffix }}\` - Playwright reports and screenshots" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -n "${{ inputs.e2e_project }}" ] && [ "${{ matrix.reqnroll }}" = "true" ]; then
-            echo "- \`reqnroll-screenshots-${{ github.run_number }}${{ matrix.suffix }}\` - Reqnroll failure screenshots" >> $GITHUB_STEP_SUMMARY
-            echo "- \`reqnroll-results-${{ github.run_number }}${{ matrix.suffix }}\` - Reqnroll test result files" >> $GITHUB_STEP_SUMMARY
-            if [ "${{ inputs.e2e_enable_video }}" = "true" ]; then
-              echo "- \`reqnroll-videos-${{ github.run_number }}${{ matrix.suffix }}\` - Reqnroll video recordings" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
+        uses: ./shared/.github/actions/e2e-stop-stack
+        with:
+          job_status: ${{ job.status }}
+          api_port: ${{ steps.stack.outputs.api_port }}
+          web_port: ${{ steps.stack.outputs.web_port }}
+          artifact_suffix: ${{ matrix.suffix }}
+          suite: ${{ matrix.shard != '' && format('Playwright (shard {0})', matrix.shard) || 'Playwright' }}
+          repo_preset: ${{ inputs.repo_preset }}
+          run_smoke_only: ${{ inputs.run_smoke_only }}
+          ran_playwright: 'true'
+          web_directory: ${{ inputs.web_directory }}

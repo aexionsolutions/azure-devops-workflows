@@ -1,0 +1,534 @@
+name: 'E2E: start the full stack'
+description: >-
+  Starts the stack every E2E suite runs against, used by each job of web-e2e-ci.yml: configures ports and the
+  test JWT, waits for the PostgreSQL and Azurite services, loads the caller's E2E environment and secrets, starts the
+  published API (migrations included), seeds test data, then installs, builds and starts the web app. Expects the
+  caller repo checked out at ./caller, the published API at ./caller/api-publish, Node and .NET set up, and the
+  workflow-level POSTGRES_PASSWORD env. Exports API_PID and WEB_PID for e2e-stop-stack.
+
+inputs:
+  repo_preset: { description: 'tems | ravenxpress | empty (use the explicit ports)', required: false, default: '' }
+  database_port: { description: 'PostgreSQL host port', required: false, default: '5432' }
+  api_port: { description: 'API port when no preset applies', required: false, default: '5000' }
+  web_port: { description: 'Web port when no preset applies', required: false, default: '3000' }
+  postgres_user: { description: 'PostgreSQL user', required: true }
+  postgres_db: { description: 'PostgreSQL database', required: true }
+  postgres_password_input: { description: 'The workflow''s plaintext postgres_password input (validated, never a real password)', required: false, default: '' }
+  postgres_password_secret: { description: 'The workflow''s POSTGRES_PASSWORD secret, if any', required: false, default: '' }
+  e2e_jwt_signing_key: { description: 'E2E JWT signing key (generated when empty)', required: false, default: '' }
+  e2e_jwt_audience: { description: 'E2E JWT audience (e2e-api when empty)', required: false, default: '' }
+  enable_azurite: { description: 'Wait for the Azurite service', required: false, default: 'true' }
+  e2e_env_vars: { description: 'Additional environment variables as JSON', required: false, default: '{}' }
+  e2e_secrets: { description: 'Additional secrets as JSON (masked)', required: false, default: '' }
+  graph_client_id: { description: 'Graph provisioning client id', required: false, default: '' }
+  graph_client_secret: { description: 'Graph provisioning client secret', required: false, default: '' }
+  api_app_id: { description: 'API app registration id', required: false, default: '' }
+  extension_app_id: { description: 'B2C extension attributes app id', required: false, default: '' }
+  b2c_tenant_id: { description: 'B2C / External ID tenant id', required: false, default: '' }
+  graph_tenant_domain: { description: 'B2C tenant primary domain', required: false, default: '' }
+  google_maps_platform_server_api_key: { description: 'Server-restricted Google Maps key', required: false, default: '' }
+  api_project: { description: 'API project path (names the published entry assembly)', required: true }
+  seed_data_script: { description: 'SQL seed file, relative to the caller repo', required: false, default: '' }
+  web_directory: { description: 'Web app directory, relative to the caller repo', required: true }
+
+outputs:
+  database_port: { description: 'PostgreSQL host port', value: '${{ steps.config.outputs.database_port }}' }
+  api_port: { description: 'API port', value: '${{ steps.config.outputs.api_port }}' }
+  web_port: { description: 'Web port', value: '${{ steps.config.outputs.web_port }}' }
+  jwt_signing_key: { description: 'E2E JWT signing key', value: '${{ steps.jwt.outputs.signing_key }}' }
+  jwt_issuer: { description: 'E2E JWT issuer', value: '${{ steps.jwt.outputs.issuer }}' }
+  jwt_audience: { description: 'E2E JWT audience', value: '${{ steps.jwt.outputs.audience }}' }
+
+runs:
+  using: composite
+  steps:
+    - name: Apply repository preset configuration
+      id: config
+      shell: bash
+      working-directory: caller
+      run: |
+        # Apply repo-specific presets if provided
+        PRESET="${{ inputs.repo_preset }}"
+
+        if [ "$PRESET" = "tems" ]; then
+          echo "ℹ️  Applying TEMS preset configuration"
+          # Note: Presets only set ports (not postgres_db or database_port)
+          # Services start before steps run, so they read inputs directly
+          echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
+          echo "api_port=5000" >> $GITHUB_OUTPUT
+          echo "web_port=3000" >> $GITHUB_OUTPUT
+        elif [ "$PRESET" = "ravenxpress" ]; then
+          echo "ℹ️  Applying RavenXpress preset configuration"
+          echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
+          echo "api_port=5100" >> $GITHUB_OUTPUT
+          echo "web_port=3100" >> $GITHUB_OUTPUT
+        else
+          # Use explicit inputs or defaults
+          echo "database_port=${{ inputs.database_port }}" >> $GITHUB_OUTPUT
+          echo "api_port=${{ inputs.api_port }}" >> $GITHUB_OUTPUT
+          echo "web_port=${{ inputs.web_port }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate Postgres password source
+      shell: bash
+      working-directory: caller
+      run: |
+        # Prevent plaintext real passwords in workflow YAML
+        if [ -z "${{ inputs.postgres_password_secret }}" ] && [ "${{ inputs.postgres_password_input }}" != "test_password_e2e_123" ]; then
+          echo "❌ Do not pass real DB passwords via inputs.postgres_password."
+          echo "   Use secrets.POSTGRES_PASSWORD instead."
+          exit 1
+        fi
+        echo "✅ Postgres password source validated"
+
+    - name: Prepare E2E JWT configuration
+      id: jwt
+      shell: bash
+      working-directory: caller
+      run: |
+        # Use secrets if provided, otherwise generate ephemeral values
+        KEY="${{ inputs.e2e_jwt_signing_key }}"
+        if [ -z "$KEY" ]; then
+          KEY=$(openssl rand -base64 48 | tr -d '\n')
+          echo "ℹ️  Generated ephemeral E2E_JWT_SIGNING_KEY for this run"
+        else
+          echo "ℹ️  Using E2E_JWT_SIGNING_KEY from repository secrets"
+        fi
+        echo "signing_key=$KEY" >> $GITHUB_OUTPUT
+
+        ISSUER="https://e2e-auth-issuer"
+        echo "issuer=$ISSUER" >> $GITHUB_OUTPUT
+
+        AUD="${{ inputs.e2e_jwt_audience }}"
+        if [ -z "$AUD" ]; then
+          AUD="e2e-api"
+          echo "ℹ️  Using default E2E_JWT_AUDIENCE: $AUD"
+        fi
+        echo "audience=$AUD" >> $GITHUB_OUTPUT
+
+    - name: Wait for PostgreSQL
+      shell: bash
+      working-directory: caller
+      env:
+        PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
+      run: |
+        echo "⏳ Waiting for PostgreSQL service on port ${{ steps.config.outputs.database_port }}..."
+        for i in {1..20}; do
+          if pg_isready -h localhost -p ${{ steps.config.outputs.database_port }} -U ${{ inputs.postgres_user }}; then
+            echo "✅ PostgreSQL ready"
+            exit 0
+          fi
+          [ $i -eq 20 ] && echo "❌ PostgreSQL failed to start" && exit 1
+          sleep 2
+        done
+
+    - name: Wait for Azurite (if enabled)
+      if: inputs.enable_azurite == 'true'
+      shell: bash
+      working-directory: caller
+      run: |
+        echo "⏳ Waiting for Azurite service..."
+        for i in {1..15}; do
+          if curl -sf http://127.0.0.1:10000/devstoreaccount1?restype=service&comp=properties >/dev/null 2>&1; then
+            echo "✅ Azurite ready on ports 10000-10002"
+            exit 0
+          fi
+          [ $i -eq 15 ] && echo "❌ Azurite failed to start" && exit 1
+          sleep 1
+        done
+
+    - name: Load E2E environment variables from JSON
+      shell: bash
+      working-directory: caller
+      env:
+        E2E_ENV_VARS_JSON: ${{ inputs.e2e_env_vars }}
+      run: |
+        # Load additional E2E environment variables before API/web startup so
+        # service processes inherit the same config that tests use.
+        if [ -n "$E2E_ENV_VARS_JSON" ] && [ "$E2E_ENV_VARS_JSON" != "{}" ]; then
+          echo "📦 Loading additional E2E environment variables..."
+          # Validate JSON syntax
+          if ! echo "$E2E_ENV_VARS_JSON" | jq -e . >/dev/null 2>&1; then
+            echo "❌ Error: Invalid e2e_env_vars JSON syntax"
+            exit 1
+          fi
+          # Write to temp file, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+          TEMP_FILE=$(mktemp)
+          echo "$E2E_ENV_VARS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+          echo "Loaded environment variable keys:"
+          cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+          while IFS=$'\t' read -r key value; do
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "${key}<<${DELIM}"
+              echo "${value}"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
+          done < "$TEMP_FILE"
+          rm -f "$TEMP_FILE"
+          echo "✅ E2E environment variables loaded"
+        else
+          echo "ℹ️  No additional E2E environment variables to load"
+        fi
+
+    - name: Load E2E secrets from JSON
+      shell: bash
+      working-directory: caller
+      env:
+        E2E_SECRETS_JSON: ${{ inputs.e2e_secrets }}
+      run: |
+        # Load additional E2E secrets before API/web startup so service
+        # processes inherit provider credentials as well as the test runner.
+        if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
+          echo "🔐 Loading additional E2E secrets from JSON..."
+          # Validate JSON syntax
+          if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
+            echo "❌ Error: Invalid e2e_secrets JSON syntax"
+            exit 1
+          fi
+          # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
+          TEMP_FILE=$(mktemp)
+          echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
+          COUNT=$(wc -l < "$TEMP_FILE")
+          echo "Loaded secret keys:"
+          cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
+          while IFS=$'\t' read -r key value; do
+            # Mask secrets: full value first (for single-line), then line-by-line (for multi-line)
+            if [[ "$value" != *$'\n'* ]]; then
+              # Single-line secret: mask the whole value
+              echo "::add-mask::$value"
+            else
+              # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
+              while IFS= read -r line; do
+                [ -n "$line" ] && echo "::add-mask::$line"
+              done <<< "$value"
+            fi
+            DELIM="EOF_$(openssl rand -hex 8)"
+            {
+              echo "${key}<<${DELIM}"
+              echo "${value}"
+              echo "${DELIM}"
+            } >> "$GITHUB_ENV"
+          done < "$TEMP_FILE"
+          rm -f "$TEMP_FILE"
+          echo "✅ E2E secrets from JSON loaded and masked ($COUNT variables)"
+        else
+          echo "ℹ️  No additional E2E secrets JSON to load"
+        fi
+
+    - name: Normalize E2E runtime environment
+      shell: bash
+      working-directory: caller
+      run: |
+        # Some repos expose provider test credentials under concise secret
+        # names, while the app configuration expects provider-style keys.
+        if [ -n "${PAYSTACK_TEST_SECRET_KEY:-}" ] && [ -z "${Paystack__SecretKey:-}" ]; then
+          echo "::add-mask::$PAYSTACK_TEST_SECRET_KEY"
+          PAYSTACK_DELIM="EOF_PAYSTACK_$(openssl rand -hex 8)"
+          {
+            echo "Paystack__SecretKey<<${PAYSTACK_DELIM}"
+            echo "$PAYSTACK_TEST_SECRET_KEY"
+            echo "${PAYSTACK_DELIM}"
+          } >> "$GITHUB_ENV"
+          echo "✅ Paystack__SecretKey mapped from PAYSTACK_TEST_SECRET_KEY"
+        fi
+
+        if [ "${{ inputs.repo_preset }}" = "ravenxpress" ]; then
+          {
+            echo "Branding__AllowAnonymousUnpublishedPreview=true"
+            echo "RAVENXPRESS_E2E_ENV=local"
+            echo "NEXT_PUBLIC_RAVENXPRESS_E2E_ENV=local"
+            echo "NEXT_PUBLIC_ENABLE_TEST_AUTH_HOOKS=true"
+          } >> "$GITHUB_ENV"
+
+          # RavenXpress refuses v1 payment creation unless the requested
+          # client platform has a registered, server-owned return profile.
+          # Match the local runner's default while preserving an explicit
+          # caller override loaded from e2e_env_vars above.
+          if [[ -z "${MobilePaymentCallbackProfiles__Web//[[:space:]]/}" ]]; then
+            echo "MobilePaymentCallbackProfiles__Web=http://localhost:${{ steps.config.outputs.web_port }}/payments/return" >> "$GITHUB_ENV"
+            echo "✅ RavenXpress web payment return profile configured"
+          else
+            echo "ℹ️  RavenXpress web payment return profile supplied by caller"
+          fi
+
+          echo "✅ RavenXpress local E2E runtime flags enabled"
+        fi
+
+    - name: Configure Graph provisioning environment
+      shell: bash
+      working-directory: caller
+      env:
+        GRAPH_CLIENT_ID: ${{ inputs.graph_client_id }}
+        GRAPH_CLIENT_SECRET: ${{ inputs.graph_client_secret }}
+        GRAPH_API_APP_ID: ${{ inputs.api_app_id }}
+        GRAPH_EXTENSION_APP_ID: ${{ inputs.extension_app_id }}
+        GRAPH_B2C_TENANT_ID: ${{ inputs.b2c_tenant_id }}
+        GRAPH_TENANT_DOMAIN: ${{ inputs.graph_tenant_domain }}
+      run: |
+        # Expose Microsoft Graph provisioning credentials to BOTH the API
+        # (which mints invited B2C identities on signup approval / user invite)
+        # and the E2E test runner (whose B2C cleanup hook resolves and deletes
+        # exactly those identities afterward). Writing to GITHUB_ENV makes them
+        # job-wide, so they survive into every later step — the API process and
+        # the dotnet test process alike.
+        #
+        # The API reads the nested Auth:B2C:* keys (Auth__B2C__* in env form);
+        # the cleanup hook reads the same keys via its config fallback, so this
+        # single export covers provisioning + teardown.
+        if [ -z "$GRAPH_CLIENT_SECRET" ] || [ -z "$GRAPH_CLIENT_ID" ] || [ -z "$GRAPH_B2C_TENANT_ID" ]; then
+          echo "ℹ️  Graph provisioning not configured (need graph_client_id + graph_client_secret + b2c_tenant_id) — invite/approval scenarios will self-skip unless E2E_REQUIRE_GRAPH forces a failure."
+          exit 0
+        fi
+        echo "::add-mask::$GRAPH_CLIENT_SECRET"
+        GRAPH_DELIM="EOF_GRAPH_$(openssl rand -hex 8)"
+        {
+          echo "Auth__B2C__GraphClientId=$GRAPH_CLIENT_ID"
+          echo "Auth__B2C__GraphClientSecret<<${GRAPH_DELIM}"
+          echo "$GRAPH_CLIENT_SECRET"
+          echo "${GRAPH_DELIM}"
+          echo "Auth__B2C__TenantId=$GRAPH_B2C_TENANT_ID"
+          [ -n "$GRAPH_TENANT_DOMAIN" ] && echo "Auth__B2C__GraphTenantDomain=$GRAPH_TENANT_DOMAIN"
+          [ -n "$GRAPH_API_APP_ID" ] && echo "Auth__B2C__ApiAppId=$GRAPH_API_APP_ID"
+          [ -n "$GRAPH_EXTENSION_APP_ID" ] && echo "Auth__B2C__ExtensionAppId=$GRAPH_EXTENSION_APP_ID"
+        } >> "$GITHUB_ENV"
+        # The cleanup hook resolves registered emails -> OIDs against the test
+        # database; the API step sets the connection string in its own scope,
+        # so expose it job-wide here too for the dotnet test process.
+        echo "ConnectionStrings__Postgres=Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${POSTGRES_PASSWORD}" >> "$GITHUB_ENV"
+        echo "✅ Graph provisioning env exported (API provisioning + B2C cleanup)"
+
+    - name: Start API server
+      shell: bash
+      working-directory: caller
+      env:
+        ASPNETCORE_ENVIRONMENT: Development
+        ASPNETCORE_URLS: http://0.0.0.0:${{ steps.config.outputs.api_port }}
+        SkipDatabaseMigrations: "false"
+        ENABLE_TEST_MIGRATIONS: "true"
+        ConnectionStrings__Postgres: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+        ConnectionStrings__Default: "Host=localhost;Port=${{ steps.config.outputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+        E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+        E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+        E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+        Auth__Issuer: ${{ steps.jwt.outputs.issuer }}
+        Auth__Audience: ${{ steps.jwt.outputs.audience }}
+        AzureStorage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+        DEDICATED_GOOGLE_MAPS_SERVER_KEY: ${{ inputs.google_maps_platform_server_api_key }}
+      run: |
+        # Prefer the typed reusable-workflow secret without putting it in
+        # GITHUB_ENV. If a caller already supplies the provider setting through
+        # e2e_secrets, retain that backwards-compatible job environment value.
+        if [ -n "$DEDICATED_GOOGLE_MAPS_SERVER_KEY" ]; then
+          echo "::add-mask::$DEDICATED_GOOGLE_MAPS_SERVER_KEY"
+          export GoogleMapsPlatform__Enabled=true
+          export GoogleMapsPlatform__ServerApiKey="$DEDICATED_GOOGLE_MAPS_SERVER_KEY"
+          echo "✅ Google Maps server credential configured from the dedicated secret"
+        elif [ -n "${GoogleMapsPlatform__ServerApiKey:-}" ]; then
+          echo "::add-mask::$GoogleMapsPlatform__ServerApiKey"
+          export GoogleMapsPlatform__Enabled=true
+          echo "✅ Google Maps server credential retained from e2e_secrets"
+        else
+          export GoogleMapsPlatform__Enabled=false
+          unset GoogleMapsPlatform__ServerApiKey
+          echo "ℹ️  Google Maps server credential not configured; provider-backed routes remain disabled"
+        fi
+
+        echo "🚀 Starting API server on port ${{ steps.config.outputs.api_port }}..."
+
+        # Remove appsettings files to prevent connection string conflicts
+        rm -f api-publish/appsettings.*.json
+        echo "ℹ️  Removed appsettings files - using environment variables only"
+
+        # Find API entry point (prefer .dll for framework-dependent, fallback to executable).
+        # Derive the entry assembly from the api_project name so we never guess wrong when the
+        # publish output also contains a referenced executable that ships its own
+        # *.runtimeconfig.json (e.g. a Worker service referenced by the API — the old
+        # `find ... | head -n1` picked whichever the filesystem returned first, which was
+        # non-deterministic and could start the wrong process). Fall back to the legacy
+        # heuristics for callers whose published assembly name differs from the .csproj name.
+        API_PROJECT_NAME="$(basename "${{ inputs.api_project }}" .csproj)"
+        if [ -f "api-publish/${API_PROJECT_NAME}.dll" ]; then
+          API_DLL="api-publish/${API_PROJECT_NAME}.dll"
+        else
+          # Legacy fallback: first assembly with a matching .runtimeconfig.json, then *.Api.dll.
+          API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.runtimeconfig.json" | sed 's/\.runtimeconfig\.json$/.dll/' | head -n1)
+          if [ ! -f "$API_DLL" ]; then
+            API_DLL=$(find api-publish -maxdepth 1 -type f -name "*.Api.dll" | head -n1)
+          fi
+        fi
+        API_BINARY=$(find api-publish -maxdepth 1 -type f \( -name "*.Api" -o -name "*.Api.exe" \) | head -n1)
+
+        # Start API in background
+        cd api-publish
+        if [ -n "$API_DLL" ]; then
+          echo "ℹ️  Starting framework-dependent API: dotnet ${API_DLL##*/}"
+          dotnet "${API_DLL##*/}" > ../api.log 2>&1 &
+          API_PID=$!
+        elif [ -n "$API_BINARY" ]; then
+          echo "ℹ️  Starting self-contained API: ${API_BINARY##*/}"
+          chmod +x "$API_BINARY"
+          "./${API_BINARY##*/}" > ../api.log 2>&1 &
+          API_PID=$!
+        else
+          echo "❌ No API entry point found in api-publish/"
+          ls -la .
+          exit 1
+        fi
+        cd ..
+        echo "API_PID=$API_PID" >> $GITHUB_ENV
+        echo "ℹ️  API process started (PID: $API_PID)"
+
+        # Wait for API health endpoint
+        echo "⏳ Waiting for API to be ready..."
+        for i in {1..60}; do
+          if curl -sf http://localhost:${{ steps.config.outputs.api_port }}/healthz >/dev/null 2>&1 || \
+             curl -sf http://localhost:${{ steps.config.outputs.api_port }}/health >/dev/null 2>&1; then
+            echo "✅ API ready on http://localhost:${{ steps.config.outputs.api_port }}"
+            exit 0
+          fi
+
+          # Check if process is still alive
+          if ! kill -0 $API_PID 2>/dev/null; then
+            echo "❌ API process died during startup"
+            echo "--- API logs (last 50 lines) ---"
+            tail -n 50 api.log || true
+            exit 1
+          fi
+
+          [ $i -eq 60 ] && echo "❌ API failed to respond after 60 seconds" && tail -n 50 api.log && exit 1
+          sleep 1
+        done
+
+    - name: Wait for migrations to complete
+      shell: bash
+      working-directory: caller
+      run: |
+        echo "⏳ Waiting for EF migrations to complete..."
+        sleep 5
+
+        # Verify critical tables exist
+        for i in {1..15}; do
+          TABLE_COUNT=$(PGPASSWORD=${{ env.POSTGRES_PASSWORD }} psql -h localhost -p ${{ steps.config.outputs.database_port }} \
+            -U ${{ inputs.postgres_user }} -d ${{ inputs.postgres_db }} -t -A -q \
+            -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>&1)
+
+          if [ "$TABLE_COUNT" -gt 0 ]; then
+            echo "✅ Database schema initialized ($TABLE_COUNT tables found)"
+            exit 0
+          fi
+
+          [ $i -eq 15 ] && echo "❌ No tables found after 15 seconds" && exit 1
+          sleep 1
+        done
+
+    - name: Seed test data
+      if: inputs.seed_data_script != ''
+      shell: bash
+      working-directory: caller
+      env:
+        PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
+      run: |
+        echo "📦 Seeding test data from ${{ inputs.seed_data_script }}..."
+        if [ ! -f "${{ inputs.seed_data_script }}" ]; then
+          echo "❌ Seed data script not found: ${{ inputs.seed_data_script }}"
+          exit 1
+        fi
+
+        psql -h localhost -p ${{ steps.config.outputs.database_port }} \
+          -U ${{ inputs.postgres_user }} \
+          -d ${{ inputs.postgres_db }} \
+          -f "${{ inputs.seed_data_script }}"
+
+        echo "✅ Test data seeded successfully"
+
+    - name: Install web dependencies
+      shell: bash
+      working-directory: caller/${{ inputs.web_directory }}
+      run: |
+        echo "📦 Installing web dependencies..."
+        if [ -f "package-lock.json" ]; then
+          npm ci
+        else
+          npm install
+        fi
+
+    - name: Build Next.js app
+      shell: bash
+      working-directory: caller/${{ inputs.web_directory }}
+      env:
+        API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+        NEXT_PUBLIC_API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+        NEXT_PUBLIC_TEST_MOCK_MSAL: "true"
+        NEXT_PUBLIC_E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+        NEXT_PUBLIC_E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+        NEXT_PUBLIC_E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+        NEXT_PUBLIC_VERSION: e2e-test
+        NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
+      run: |
+        echo "🏗️  Building Next.js app..."
+        npm run build
+
+    - name: Start Next.js server
+      shell: bash
+      working-directory: caller/${{ inputs.web_directory }}
+      env:
+        API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+        NEXT_PUBLIC_API_BASE: http://localhost:${{ steps.config.outputs.api_port }}
+        NEXT_PUBLIC_TEST_MOCK_MSAL: "true"
+        NEXT_PUBLIC_E2E_JWT_SIGNING_KEY: ${{ steps.jwt.outputs.signing_key }}
+        NEXT_PUBLIC_E2E_JWT_ISSUER: ${{ steps.jwt.outputs.issuer }}
+        NEXT_PUBLIC_E2E_JWT_AUDIENCE: ${{ steps.jwt.outputs.audience }}
+        NODE_ENV: production
+        PORT: ${{ steps.config.outputs.web_port }}
+      run: |
+        echo "🚀 Starting Next.js server on port ${{ steps.config.outputs.web_port }}..."
+        npm run start > ../web.log 2>&1 &
+        WEB_PID=$!
+        echo "WEB_PID=$WEB_PID" >> $GITHUB_ENV
+        echo "ℹ️  Next.js process started (PID: $WEB_PID)"
+
+        # Wait for web server readiness
+        echo "⏳ Waiting for Next.js to be ready..."
+        for i in {1..60}; do
+          if curl -sf http://localhost:${{ steps.config.outputs.web_port }}/healthz >/dev/null 2>&1 || \
+             curl -sf http://localhost:${{ steps.config.outputs.web_port }} >/dev/null 2>&1; then
+            echo "✅ Next.js ready on http://localhost:${{ steps.config.outputs.web_port }}"
+            exit 0
+          fi
+
+          # Check if process is still alive
+          if ! kill -0 $WEB_PID 2>/dev/null; then
+            echo "❌ Next.js process died during startup"
+            echo "--- Web logs (last 50 lines) ---"
+            tail -n 50 ../web.log || true
+            exit 1
+          fi
+
+          [ $i -eq 60 ] && echo "❌ Next.js failed to respond after 60 seconds" && tail -n 50 ../web.log && exit 1
+          sleep 1
+        done
+
+    - name: Verify services health
+      shell: bash
+      working-directory: caller
+      run: |
+        echo "🔍 Verifying all services are healthy..."
+
+        # API health check
+        API_HEALTH=$(curl -sf http://localhost:${{ steps.config.outputs.api_port }}/healthz || curl -sf http://localhost:${{ steps.config.outputs.api_port }}/health || echo "failed")
+        if [[ "$API_HEALTH" == *"Healthy"* ]] || [[ "$API_HEALTH" == *"healthy"* ]] || [[ "$API_HEALTH" != "failed" ]]; then
+          echo "✅ API is healthy"
+        else
+          echo "❌ API health check failed: $API_HEALTH"
+          exit 1
+        fi
+
+        # Web health check
+        WEB_HEALTH=$(curl -sf http://localhost:${{ steps.config.outputs.web_port }}/healthz || curl -sf http://localhost:${{ steps.config.outputs.web_port }} || echo "failed")
+        if [[ "$WEB_HEALTH" != "failed" ]]; then
+          echo "✅ Web is healthy"
+        else
+          echo "❌ Web health check failed"
+          exit 1
+        fi

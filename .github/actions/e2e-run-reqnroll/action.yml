@@ -1,0 +1,144 @@
+name: 'E2E: run the Reqnroll suite'
+description: >-
+  Runs the caller's Reqnroll (.NET) E2E project against the stack e2e-start-stack started, with smart retries
+  (dotnet-test-retry), and uploads its screenshots, videos and results. Reqnroll drives the browser through
+  Microsoft.Playwright, so this installs that package's browsers itself. Expects the shared workflows repo
+  checked out at ./shared.
+
+inputs:
+  e2e_project: { description: 'Reqnroll project path, relative to the caller repo', required: true }
+  run_smoke_only: { description: 'Run only the smoke category', required: false, default: 'false' }
+  test_filter: { description: 'Reqnroll tag filter (e.g. @regression)', required: false, default: '' }
+  retry_attempts: { description: 'Total attempts (dotnet-test-retry max-attempts)', required: false, default: '3' }
+  console_verbosity: { description: 'dotnet test console verbosity', required: false, default: 'normal' }
+  enable_video: { description: 'Record videos', required: false, default: 'false' }
+  database_port: { description: 'PostgreSQL host port', required: true }
+  api_port: { description: 'API port', required: true }
+  web_port: { description: 'Web port', required: true }
+  postgres_user: { description: 'PostgreSQL user', required: true }
+  postgres_db: { description: 'PostgreSQL database', required: true }
+  jwt_signing_key: { description: 'E2E JWT signing key', required: true }
+  jwt_issuer: { description: 'E2E JWT issuer', required: true }
+  jwt_audience: { description: 'E2E JWT audience', required: true }
+  b2c_authority: { description: 'B2C authority', required: false, default: '' }
+  b2c_client_id: { description: 'B2C client id', required: false, default: '' }
+  b2c_scope: { description: 'B2C API scope', required: false, default: '' }
+  b2c_client_secret: { description: 'B2C client secret', required: false, default: '' }
+  artifact_suffix: { description: 'Suffix for artifact names (keeps each job''s artifacts distinct)', required: false, default: '' }
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare Reqnroll E2E tests
+      id: filter-prep
+      shell: bash
+      working-directory: caller
+      run: |
+        echo "🧪 Preparing Reqnroll/SpecFlow E2E tests..."
+        echo "ℹ️  E2E project: ${{ inputs.e2e_project }}"
+
+        # Log which B2C settings are present (never their values)
+        echo "🔐 B2C Configuration:"
+        [ -n "${{ inputs.b2c_authority }}" ] && echo "  ✅ B2C_AUTHORITY configured" || echo "  ⚠️ B2C_AUTHORITY not configured"
+        [ -n "${{ inputs.b2c_client_id }}" ] && echo "  ✅ B2C_CLIENT_ID configured" || echo "  ⚠️ B2C_CLIENT_ID not configured"
+        [ -n "${{ inputs.b2c_scope }}" ] && echo "  ✅ B2C_SCOPE configured" || echo "  ⚠️ B2C_SCOPE not configured"
+        [ -n "${{ inputs.b2c_client_secret }}" ] && echo "  ✅ B2C_CLIENT_SECRET configured" || echo "  ⚠️ B2C_CLIENT_SECRET not configured"
+
+        # Determine test filter - Reqnroll tags (e.g., @smoke) become NUnit categories (without @)
+        if [ "${{ inputs.run_smoke_only }}" = "true" ]; then
+          FILTER="smoke"
+          echo "ℹ️  Running smoke tests only (filter: Category=smoke)"
+        elif [ -n "${{ inputs.test_filter }}" ]; then
+          # Remove @ prefix if present (Gherkin tags use @, NUnit categories don't)
+          FILTER="${{ inputs.test_filter }}"
+          FILTER="${FILTER#@}"
+          echo "ℹ️  Running tests with filter: Category=$FILTER"
+        else
+          FILTER=""
+          echo "ℹ️  Running all E2E tests (no filter)"
+        fi
+
+        # Build test project first to generate Playwright install script
+        echo "🏗️  Building E2E test project..."
+        dotnet build ${{ inputs.e2e_project }} -c Release --nologo
+
+        # Install Playwright browsers for .NET (Reqnroll drives the browser through Microsoft.Playwright)
+        PLAYWRIGHT_SCRIPT=$(find . -path "*/bin/Release/*/playwright.ps1" | head -n1)
+        if [ -n "$PLAYWRIGHT_SCRIPT" ]; then
+          echo "📦 Installing Playwright browsers for .NET..."
+          pwsh "$PLAYWRIGHT_SCRIPT" install --with-deps
+        fi
+
+        # Output filter for next step
+        if [ -n "$FILTER" ]; then
+          echo "filter=Category=$FILTER" >> $GITHUB_OUTPUT
+        else
+          echo "filter=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run Reqnroll E2E tests
+      uses: ./shared/.github/actions/dotnet-test-retry
+      env:
+        RUN_E2E: "true"
+        # CI runs API/DB locally — ensure all E2E components use local auth (JWT) not B2C
+        RAVENXPRESS_E2E_ENV: "local"
+        E2E_BASE_URL: http://localhost:${{ inputs.web_port }}
+        E2E_API_BASE_URL: http://localhost:${{ inputs.api_port }}
+        E2E_DATABASE_CONNECTION_STRING: "Host=localhost;Port=${{ inputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+        ConnectionStrings__Default: "Host=localhost;Port=${{ inputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+        ConnectionStrings__Postgres: "Host=localhost;Port=${{ inputs.database_port }};Database=${{ inputs.postgres_db }};Username=${{ inputs.postgres_user }};Password=${{ env.POSTGRES_PASSWORD }}"
+        E2E_JWT_SIGNING_KEY: ${{ inputs.jwt_signing_key }}
+        E2E_JWT_ISSUER: ${{ inputs.jwt_issuer }}
+        E2E_JWT_AUDIENCE: ${{ inputs.jwt_audience }}
+        E2E_HEADLESS: "true"
+        E2E_SLOWMO: "0"
+        E2E_ENABLE_VIDEO: ${{ inputs.enable_video == 'true' && 'true' || 'false' }}
+        B2C_AUTHORITY: ${{ inputs.b2c_authority }}
+        B2C_CLIENT_ID: ${{ inputs.b2c_client_id }}
+        B2C_SCOPE: ${{ inputs.b2c_scope }}
+        B2C_CLIENT_SECRET: ${{ inputs.b2c_client_secret }}
+        # Additional E2E env vars and secrets were loaded into the job environment by e2e-start-stack
+      with:
+        project: caller/${{ inputs.e2e_project }}
+        filter: ${{ steps.filter-prep.outputs.filter }}
+        max-attempts: ${{ inputs.retry_attempts }}
+        results-directory: ./TestResults
+        configuration: Release
+        no-build: true
+        console-verbosity: ${{ inputs.console_verbosity }}
+        trx-filename-prefix: e2e-attempt
+
+    - name: Upload Reqnroll screenshots
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: reqnroll-screenshots-${{ github.run_number }}${{ inputs.artifact_suffix }}
+        path: |
+          caller/**/Screenshot/**
+          caller/**/Screenshots/**
+        if-no-files-found: ignore
+        retention-days: 7
+
+    - name: Upload Reqnroll videos
+      if: always() && inputs.enable_video == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: reqnroll-videos-${{ github.run_number }}${{ inputs.artifact_suffix }}
+        path: |
+          caller/**/videos/**
+          caller/**/Videos/**
+        if-no-files-found: ignore
+        retention-days: 3
+
+    - name: Upload Reqnroll test results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: reqnroll-results-${{ github.run_number }}${{ inputs.artifact_suffix }}
+        path: |
+          TestResults/**
+          caller/**/TestResults/**
+          e2e-attempt-*.trx
+          caller/**/e2e-attempt-*.trx
+        if-no-files-found: ignore
+        retention-days: 7

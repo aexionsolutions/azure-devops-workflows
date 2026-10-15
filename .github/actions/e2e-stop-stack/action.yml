@@ -1,0 +1,148 @@
+name: 'E2E: stop the full stack'
+description: >-
+  Tears down what e2e-start-stack started, whatever the job's outcome: captures and uploads API and web logs when
+  the job failed, stops the background processes, and writes the job summary. Call it with if: always() and pass
+  job_status: job.status, which a composite action cannot read for itself.
+
+inputs:
+  job_status: { description: 'job.status of the calling job (success | failure | cancelled)', required: true }
+  api_port: { description: 'API port', required: false, default: '' }
+  web_port: { description: 'Web port', required: false, default: '' }
+  artifact_suffix: { description: 'Suffix for artifact names (keeps each job''s artifacts distinct)', required: false, default: '' }
+  suite: { description: 'What this job ran, for the summary (e.g. "Reqnroll", "Playwright (shard 1/2)")', required: true }
+  repo_preset: { description: 'Preset, for the summary', required: false, default: '' }
+  run_smoke_only: { description: 'Smoke-only mode, for the summary', required: false, default: 'false' }
+  test_filter: { description: 'Reqnroll filter, for the summary', required: false, default: '' }
+  ran_playwright: { description: 'This job ran the Playwright suite', required: false, default: 'false' }
+  ran_reqnroll: { description: 'This job ran the Reqnroll suite', required: false, default: 'false' }
+  web_directory: { description: 'Web app directory, relative to the caller repo', required: false, default: '' }
+  enable_video: { description: 'Reqnroll videos were recorded', required: false, default: 'false' }
+
+runs:
+  using: composite
+  steps:
+    - name: Capture diagnostic logs on failure
+      if: inputs.job_status == 'failure'
+      shell: bash
+      run: |
+        echo "📋 Capturing diagnostic information..."
+        echo ""
+
+        # Check process status
+        echo "=== Process Status ==="
+        if kill -0 "${API_PID:-}" 2>/dev/null; then
+          echo "✅ API process still running (PID: $API_PID)"
+        else
+          echo "❌ API process died (PID: ${API_PID:-not started})"
+        fi
+
+        if kill -0 "${WEB_PID:-}" 2>/dev/null; then
+          echo "✅ Web process still running (PID: $WEB_PID)"
+        else
+          echo "❌ Web process died (PID: ${WEB_PID:-not started})"
+        fi
+        echo ""
+
+        # Test endpoints
+        echo "=== Endpoint Tests ==="
+        curl -v "http://localhost:${{ inputs.api_port }}/healthz" 2>&1 || echo "API health endpoint failed"
+        echo ""
+        curl -v "http://localhost:${{ inputs.web_port }}/healthz" 2>&1 || echo "Web health endpoint failed"
+        echo ""
+
+        # Show logs
+        echo "=== API Logs (last 100 lines) ==="
+        tail -n 100 caller/api.log 2>/dev/null || echo "No API logs found"
+        echo ""
+
+        echo "=== Web Logs (last 100 lines) ==="
+        tail -n 100 caller/web.log 2>/dev/null || echo "No web logs found"
+
+    - name: Cleanup background processes
+      shell: bash
+      run: |
+        echo "🧹 Cleaning up background processes..."
+        [ -n "${WEB_PID:-}" ] && kill "$WEB_PID" 2>/dev/null || true
+        [ -n "${API_PID:-}" ] && kill "$API_PID" 2>/dev/null || true
+        sleep 2
+
+    - name: Upload diagnostic logs
+      if: inputs.job_status == 'failure'
+      uses: actions/upload-artifact@v7
+      with:
+        name: e2e-diagnostic-logs-${{ github.run_number }}${{ inputs.artifact_suffix }}
+        path: |
+          caller/api.log
+          caller/web.log
+        if-no-files-found: ignore
+        retention-days: 7
+
+    - name: Generate test summary
+      shell: bash
+      env:
+        SUITE: ${{ inputs.suite }}
+        PRESET: ${{ inputs.repo_preset }}
+        API_PORT: ${{ inputs.api_port }}
+        WEB_PORT: ${{ inputs.web_port }}
+        SMOKE_ONLY: ${{ inputs.run_smoke_only }}
+        TEST_FILTER: ${{ inputs.test_filter }}
+        RAN_PLAYWRIGHT: ${{ inputs.ran_playwright }}
+        RAN_REQNROLL: ${{ inputs.ran_reqnroll }}
+        WEB_DIRECTORY: ${{ inputs.web_directory }}
+        ENABLE_VIDEO: ${{ inputs.enable_video }}
+        SUFFIX: ${{ inputs.artifact_suffix }}
+        RUN_NUMBER: ${{ github.run_number }}
+      run: |
+        {
+          echo "## 🧪 E2E Test Results"
+          echo ""
+          echo "**Configuration:**"
+          echo "- Suite: $SUITE"
+          echo "- Preset: ${PRESET:-none (using explicit inputs)}"
+          echo "- API: http://localhost:$API_PORT"
+          echo "- Web: http://localhost:$WEB_PORT"
+          if [ "$SMOKE_ONLY" = "true" ]; then echo "- Mode: Smoke tests only"; else echo "- Mode: Full test suite"; fi
+          if [ -n "$TEST_FILTER" ] && [ "$RAN_REQNROLL" = "true" ]; then echo "- Filter: \`$TEST_FILTER\`"; fi
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Check for retry attempts
+        ATTEMPT_COUNT=$(find . -name "e2e-attempt-*.trx" 2>/dev/null | wc -l || echo 0)
+        if [ "$ATTEMPT_COUNT" -gt 1 ]; then
+          { echo "🔄 **Test Retry Information**: $ATTEMPT_COUNT attempt(s) executed"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$RAN_PLAYWRIGHT" = "true" ]; then
+          PLAYWRIGHT_FAILURES=$(find "caller/$WEB_DIRECTORY/test-results" -name "*.png" 2>/dev/null | wc -l || echo 0)
+          if [ "$PLAYWRIGHT_FAILURES" -gt 0 ]; then
+            echo "⚠️ **Playwright**: $PLAYWRIGHT_FAILURES failure screenshot(s)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        if [ "$RAN_REQNROLL" = "true" ]; then
+          REQNROLL_SCREENSHOTS=$(find caller -path "*/Screenshot/*.png" 2>/dev/null | wc -l || echo 0)
+          if [ "$REQNROLL_SCREENSHOTS" -gt 0 ]; then
+            echo "⚠️ **Reqnroll**: $REQNROLL_SCREENSHOTS failure screenshot(s)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$ENABLE_VIDEO" = "true" ]; then
+            VIDEO_COUNT=$(find caller -path "*/videos/*.webm" 2>/dev/null | wc -l || echo 0)
+            if [ "$VIDEO_COUNT" -gt 0 ]; then
+              echo "📹 **Videos**: $VIDEO_COUNT recording(s) captured" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+        fi
+
+        {
+          echo ""
+          echo "### 📦 Artifacts"
+          if [ "$RAN_PLAYWRIGHT" = "true" ]; then
+            echo "- \`playwright-e2e-${RUN_NUMBER}${SUFFIX}\` - Playwright reports and screenshots"
+          fi
+          if [ "$RAN_REQNROLL" = "true" ]; then
+            echo "- \`reqnroll-screenshots-${RUN_NUMBER}${SUFFIX}\` - Reqnroll failure screenshots"
+            echo "- \`reqnroll-results-${RUN_NUMBER}${SUFFIX}\` - Reqnroll test result files"
+            if [ "$ENABLE_VIDEO" = "true" ]; then
+              echo "- \`reqnroll-videos-${RUN_NUMBER}${SUFFIX}\` - Reqnroll video recordings"
+            fi
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
