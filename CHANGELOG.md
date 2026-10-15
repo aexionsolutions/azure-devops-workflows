@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dotnet-test-retry`: opt-in skips are not retried, and are reported.** A test
+  that is off by configuration skips itself with a message starting
+  `[opt-in]`. A retry runs with the same configuration, so such a test is no
+  longer retried; it is not a failure, and it is listed as giving no coverage
+  (`opt-in-skipped-count` output, a notice, a job-summary section). A skip
+  without the marker is still retried, since it may hide a hook failure.
+
+### Fixed
+
+- **`dotnet-test-retry`: "no failures" is no longer told from "no TRX" by
+  `$null`.** PowerShell returns an empty failure list as `$null`, so the two
+  were indistinguishable and the script's "non-zero exit but no recorded
+  failure → pass (infra flake)" branch was unreachable. It is removed rather
+  than made reachable: a readable TRX is now checked explicitly, a first
+  attempt that exits non-zero with nothing to retry fails, and a retry that
+  exits non-zero re-runs the last known failures. Only an attempt that exits 0
+  with every failure resolved passes. Behaviour is otherwise unchanged.
+- **E2E secrets: a flag value no longer masks itself across the whole log.**
+  Every `e2e_secrets` value was registered with `::add-mask::`, so a flag such
+  as `1` or `true` replaced every occurrence of that text in the run's log with
+  `***`. `e2e-start-stack` and `web-e2e-deployed.yml` now pass a flag value
+  (`true`/`false`/`yes`/`no`/`on`/`off` or one digit) through unmasked, with a
+  warning naming the key so it can move to `e2e_env_vars`. Every other value is
+  still masked.
+
 ### Changed (breaking)
 
 - **Plain-English check names.** Job display names change, so the check names

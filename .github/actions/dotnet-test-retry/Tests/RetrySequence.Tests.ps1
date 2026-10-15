@@ -43,6 +43,7 @@ BeforeAll {
     @'
 #!/usr/bin/env bash
 n=$(( $(cat "$FAKE_STATE/count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_STATE/count"
+echo "$*" > "$FAKE_STATE/args-$n"
 while [ $# -gt 0 ]; do
   case "$1" in
     --logger) case "$2" in trx*) name="${2#*LogFileName=}";; esac; shift;;
@@ -72,10 +73,13 @@ exit "$(cat "$FAKE_STATE/exit-$n")"
     # The results the run leaves: the merged TRX, or the first attempt's when no retry result replaced anything.
     $merged = Join-Path $results 'e2e-attempt-merged.trx'
     if (-not (Test-Path $merged)) { $merged = Join-Path $results 'e2e-attempt-1.trx' }
+    $attemptCount = [int](Get-Content (Join-Path $state 'count'))
     return [pscustomobject]@{
       Exit = $exit
       Outputs = $outputs
-      Attempts = [int](Get-Content (Join-Path $state 'count'))
+      Attempts = $attemptCount
+      # The dotnet command line of each attempt (index 0 = attempt 1), so a test can see what a retry was filtered to.
+      Args = @(1..$attemptCount | ForEach-Object { Get-Content (Join-Path $state "args-$_") -Raw })
       Merged = [xml](Get-Content $merged -Raw)
     }
   }
@@ -129,9 +133,9 @@ Describe 'Retry sequence (real script, fake dotnet)' -Skip:(-not $IsLinux) {
     Get-MergedOutcome $run 'QuotaSkipped' | Should -Be 'NotExecuted'
   }
 
-  It 'does not fail an opt-in scenario that skips with a message on every attempt (Assert.Ignore is not a failure)' {
-    # RavenXpress: real-B2C and Graph scenarios Assert.Ignore when their configuration is absent. The retry list has
-    # always included such skips; they are retried, skip again, and must not fail the run.
+  It 'does not fail an unmarked skip that skips with a message on every attempt (Assert.Ignore is not a failure)' {
+    # A skip with a message but without the [opt-in] marker may hide a hook failure, so it is retried; when it only
+    # skips again it must not fail the run.
     $optIn = @{ Name = 'RegistersWithRealB2c'; Outcome = 'NotExecuted'; Message = 'Real B2C browser-auth scenarios are opt-in for local runs.' }
     $run = Invoke-RetrySequence @(
       @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Failed'; Message = 'timeout' }, $optIn) },
@@ -139,6 +143,48 @@ Describe 'Retry sequence (real script, fake dotnet)' -Skip:(-not $IsLinux) {
 
     $run.Exit | Should -Be 0
     $run.Outputs['exit-code'] | Should -Be '0'
+  }
+
+  It 'does not retry an opt-in skip: the retry runs only the real failure' {
+    $optIn = @{ Name = 'RunsPaystack'; Outcome = 'NotExecuted'; Message = '[opt-in] Paystack E2E is opt-in. Set E2E_RUN_PAYSTACK=true.' }
+    $run = Invoke-RetrySequence @(
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Failed'; Message = 'timeout' }, $optIn) },
+      @{ Exit = 0; Results = @(@{ Name = 'Flaky'; Outcome = 'Passed' }) })
+
+    $run.Exit | Should -Be 0
+    $run.Args[1] | Should -Match 'Flaky'
+    $run.Args[1] | Should -Not -Match 'RunsPaystack'
+  }
+
+  It 'fails the first attempt when dotnet exits non-zero but records no failure (nothing to retry is not a pass)' {
+    $run = Invoke-RetrySequence @(
+      @{ Exit = 1; Results = @(@{ Name = 'Steady'; Outcome = 'Passed' }) })
+
+    $run.Exit | Should -Not -Be 0
+    $run.Attempts | Should -Be 1
+  }
+
+  It 'never passes on a retry that exits non-zero, even when it records no failure' {
+    # Attempt 2 passes the failed test but exits 1 (for example the test host crashed afterwards). A non-zero exit is
+    # never a pass: the last known failures are retried, and only an attempt that exits 0 can pass the run.
+    $run = Invoke-RetrySequence @(
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Failed'; Message = 'timeout' }) },
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Passed' }) },
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Passed' }) })
+
+    $run.Exit | Should -Not -Be 0
+    $run.Attempts | Should -Be 3
+    $run.Args[2] | Should -Match 'Flaky'
+  }
+
+  It 'passes once a re-run of the last known failures exits 0' {
+    $run = Invoke-RetrySequence @(
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Failed'; Message = 'timeout' }) },
+      @{ Exit = 1; Results = @(@{ Name = 'Flaky'; Outcome = 'Passed' }) },
+      @{ Exit = 0; Results = @(@{ Name = 'Flaky'; Outcome = 'Passed' }) })
+
+    $run.Exit | Should -Be 0
+    $run.Attempts | Should -Be 3
   }
 
   It 'fails a test that keeps failing to the last attempt' {

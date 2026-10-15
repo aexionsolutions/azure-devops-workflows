@@ -11,9 +11,15 @@
   failure, and it is reported separately: it gave no coverage, it did not pass. Only the caller can establish
   quota exhaustion (from the provider's own response), so only a message starting with the marker counts; a
   setup error without it is still retried and still fails.
+
+  Opt-in skips: a test that is off by configuration (its credentials or opt-in flag are absent) skips itself with a
+  message that starts with the opt-in marker below. A retry runs with the same configuration, so it is not retried; it
+  is not a failure, and it is reported separately as giving no coverage. Only a message starting with the marker
+  counts: any other skip with a message may hide a hook failure, so it is still retried.
 #>
 
 $script:ProviderQuotaMarker = '[provider-quota]'
+$script:OptInMarker = '[opt-in]'
 
 function Load-Trx([string]$path) {
   $xml = New-Object System.Xml.XmlDocument
@@ -68,8 +74,44 @@ function Test-ProviderQuotaSkip {
 
   $outcome = $Node.GetAttribute('outcome')
   if ($outcome -ne 'NotExecuted' -and $outcome -ne 'Inconclusive') { return $false }
+  return (Test-SkipMessageMarker -Node $Node -Ns $Ns -Marker $script:ProviderQuotaMarker)
+}
+
+# True when the result skipped itself because the test is off by configuration: not executed (or inconclusive), with a
+# message that starts with the opt-in marker. A failed result is never an opt-in skip, whatever it says.
+function Test-OptInSkip {
+  param(
+    [System.Xml.XmlNode]$Node,
+    [System.Xml.XmlNamespaceManager]$Ns
+  )
+
+  return (Test-SkipMessageMarker -Node $Node -Ns $Ns -Marker $script:OptInMarker)
+}
+
+function Test-SkipMessageMarker {
+  param(
+    [System.Xml.XmlNode]$Node,
+    [System.Xml.XmlNamespaceManager]$Ns,
+    [string]$Marker
+  )
+
+  $outcome = $Node.GetAttribute('outcome')
+  if ($outcome -ne 'NotExecuted' -and $outcome -ne 'Inconclusive') { return $false }
   $message = (Get-ResultMessage -Node $Node -Ns $Ns).TrimStart()
-  return $message.StartsWith($script:ProviderQuotaMarker, [System.StringComparison]::Ordinal)
+  return $message.StartsWith($Marker, [System.StringComparison]::Ordinal)
+}
+
+# Whether an attempt's TRX exists and parses. The FQN functions return an empty result as $null (PowerShell unrolls an
+# empty array), so "no failures" and "no readable TRX" must be told apart with this, never with a $null check.
+function Test-TrxReadable([string]$trxPath) {
+  if (-not (Test-Path $trxPath)) { return $false }
+  try {
+    [void](Load-Trx $trxPath)
+    return $true
+  }
+  catch {
+    return $false
+  }
 }
 
 function Get-FqnMap {
@@ -111,8 +153,8 @@ function ConvertTo-Fqns {
 }
 
 function Get-FailedFQNsFromTrx([string]$trxPath) {
-  # Return $null (not @()) when TRX is missing/unreadable so caller can distinguish
-  # between "TRX exists with 0 failures" vs "TRX doesn't exist/corrupt"
+  # $null when the TRX is missing or unreadable, but an empty list also arrives as $null (PowerShell unrolls it), so
+  # callers tell "no failures" from "no TRX" with Test-TrxReadable.
   if (-not (Test-Path $trxPath)) { return $null }
 
   try {
@@ -131,7 +173,7 @@ function Get-FailedFQNsFromTrx([string]$trxPath) {
   $failedNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed' or @outcome='Error' or @outcome='Timeout' or @outcome='Aborted']", $ns)
 
   # Also collect NotExecuted tests, but ONLY real hook/setup failures.
-  # Intentional deployed-safety skips and provider-quota skips are emitted as
+  # Intentional deployed-safety skips, provider-quota skips and opt-in skips are emitted as
   # NotExecuted with ErrorInfo too, so filter those out before building the retry list.
   $notExecNodes = $xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='NotExecuted']", $ns)
   $intentionalNotExecutedSkips = @($notExecNodes | Where-Object {
@@ -140,9 +182,12 @@ function Get-FailedFQNsFromTrx([string]$trxPath) {
   $quotaSkips = @($notExecNodes | Where-Object {
     Test-ProviderQuotaSkip -Node $_ -Ns $ns
   })
+  $optInSkips = @($notExecNodes | Where-Object {
+    Test-OptInSkip -Node $_ -Ns $ns
+  })
   $hookFailures = @($notExecNodes | Where-Object {
     $hasErrorInfo = $_.SelectSingleNode('trx:Output/trx:ErrorInfo', $ns) -ne $null
-    $hasErrorInfo -and -not (Test-IntentionalNotExecutedSkip -Node $_ -Ns $ns) -and -not (Test-ProviderQuotaSkip -Node $_ -Ns $ns)
+    $hasErrorInfo -and -not (Test-IntentionalNotExecutedSkip -Node $_ -Ns $ns) -and -not (Test-ProviderQuotaSkip -Node $_ -Ns $ns) -and -not (Test-OptInSkip -Node $_ -Ns $ns)
   })
   $skippedCount = $notExecNodes.Count - $hookFailures.Count
   if ($skippedCount -gt 0) {
@@ -153,6 +198,9 @@ function Get-FailedFQNsFromTrx([string]$trxPath) {
   }
   if ($quotaSkips.Count -gt 0) {
     Write-Host ("   ℹ️ {0} test(s) skipped for an exhausted provider quota were ignored by retry selection (no coverage from them)" -f $quotaSkips.Count)
+  }
+  if ($optInSkips.Count -gt 0) {
+    Write-Host ("   ℹ️ {0} opt-in test(s) skipped by configuration were ignored by retry selection (no coverage from them)" -f $optInSkips.Count)
   }
 
   return (ConvertTo-Fqns -Nodes (@($failedNodes) + $hookFailures) -Map $map)
@@ -171,6 +219,22 @@ function Get-ProviderQuotaSkippedFQNsFromTrx([string]$trxPath) {
 
   $nodes = @($doc.Xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='NotExecuted' or @outcome='Inconclusive']", $doc.Ns) |
     Where-Object { Test-ProviderQuotaSkip -Node $_ -Ns $doc.Ns })
+  return (ConvertTo-Fqns -Nodes $nodes -Map (Get-FqnMap -Xml $doc.Xml -Ns $doc.Ns))
+}
+
+# The tests skipped as opt-in (fully qualified names); empty when there are none, $null when the TRX is missing or
+# unreadable.
+function Get-OptInSkippedFQNsFromTrx([string]$trxPath) {
+  if (-not (Test-Path $trxPath)) { return $null }
+  try {
+    $doc = Load-Trx $trxPath
+  }
+  catch {
+    return $null
+  }
+
+  $nodes = @($doc.Xml.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='NotExecuted' or @outcome='Inconclusive']", $doc.Ns) |
+    Where-Object { Test-OptInSkip -Node $_ -Ns $doc.Ns })
   return (ConvertTo-Fqns -Nodes $nodes -Map (Get-FqnMap -Xml $doc.Xml -Ns $doc.Ns))
 }
 
