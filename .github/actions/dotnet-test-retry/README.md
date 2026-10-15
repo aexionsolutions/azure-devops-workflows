@@ -127,6 +127,21 @@ This action fixes several critical issues found in naive retry implementations:
 | `exit-code` | Exit code from the test run (0 = success, non-zero = failure) |
 | `attempts-used` | Number of attempts used |
 | `failed-tests-count` | Number of tests that failed on first attempt |
+| `provider-quota-skipped-count` | Number of tests that did not run because a provider quota was exhausted (see below) |
+
+## Provider-quota skips
+
+A test that cannot run because an external provider's quota is exhausted (for example Paystack test mode's daily
+bank-resolution limit) should mark itself inconclusive with a message that **starts with** `[provider-quota]`, and
+only once the provider's own response proves the quota is exhausted. Such a test:
+
+- is **not retried** (a retry would hit the same exhausted quota) and is **not counted as a failure**;
+- is **reported separately**: a warning annotation, a job-summary section listing it, and the
+  `provider-quota-skipped-count` output. It gave no coverage, so it must not read as a pass.
+
+A setup error without the marker is still retried and still fails, and a `Failed` result is never treated as a quota
+skip whatever its message says. The rules live in `TrxSelection.ps1`; `Tests/TrxSelection.Tests.ps1` (Pester 5,
+run by `action-tests.yml`) covers them.
 
 ## How It Works
 
