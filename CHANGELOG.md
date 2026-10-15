@@ -26,13 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempt that exits non-zero with nothing to retry fails, and a retry that
   exits non-zero re-runs the last known failures. Only an attempt that exits 0
   with every failure resolved passes. Behaviour is otherwise unchanged.
-- **E2E secrets: a flag value no longer masks itself across the whole log.**
-  Every `e2e_secrets` value was registered with `::add-mask::`, so a flag such
-  as `1` or `true` replaced every occurrence of that text in the run's log with
-  `***`. `e2e-start-stack` and `web-e2e-deployed.yml` now pass a flag value
-  (`true`/`false`/`yes`/`no`/`on`/`off` or one digit) through unmasked, with a
-  warning naming the key so it can move to `e2e_env_vars`. Every other value is
-  still masked.
+- **E2E secrets: a flag-like value now names its key.** Every `e2e_secrets`
+  value is masked, so a flag such as `1` or `true` kept there replaces every
+  occurrence of that text in the run's log with `***`, and nothing said which
+  key caused it. Values stay masked (a value alone cannot tell a password from a
+  flag: a password can be `false`), and a flag-like value
+  (`true`/`false`/`yes`/`no`/`on`/`off` or one digit) now raises a warning
+  naming its key, so a non-secret flag can move to `e2e_env_vars`. The loading
+  logic, previously duplicated in `e2e-start-stack` and `web-e2e-deployed.yml`,
+  is one script (`e2e-start-stack/load-e2e-secrets.sh`) covered by
+  `Tests/LoadE2eSecrets.Tests.ps1`; `action-tests.yml` now runs every action's
+  tests.
 
 ### Changed (breaking)
 

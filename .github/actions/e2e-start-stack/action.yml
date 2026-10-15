@@ -176,53 +176,7 @@ runs:
       working-directory: caller
       env:
         E2E_SECRETS_JSON: ${{ inputs.e2e_secrets }}
-      run: |
-        # Load additional E2E secrets before API/web startup so service
-        # processes inherit provider credentials as well as the test runner.
-        if [ -n "$E2E_SECRETS_JSON" ] && [ "$E2E_SECRETS_JSON" != "{}" ]; then
-          echo "🔐 Loading additional E2E secrets from JSON..."
-          # Validate JSON syntax
-          if ! echo "$E2E_SECRETS_JSON" | jq -e . >/dev/null 2>&1; then
-            echo "❌ Error: Invalid e2e_secrets JSON syntax"
-            exit 1
-          fi
-          # Write to temp file, mask values, then append to GITHUB_ENV using heredoc (safe for multi-line/special chars)
-          TEMP_FILE=$(mktemp)
-          echo "$E2E_SECRETS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' > "$TEMP_FILE"
-          COUNT=$(wc -l < "$TEMP_FILE")
-          echo "Loaded secret keys:"
-          cut -f1 "$TEMP_FILE" | sed 's/^/  - /'
-          while IFS=$'\t' read -r key value; do
-            # Mask secrets: full value first (for single-line), then line-by-line (for multi-line).
-            # A flag (true/false/yes/no/on/off or one digit) is not a secret, and masking it would replace every
-            # occurrence of that text in the log with ***, so it is passed through unmasked with a warning.
-            case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
-              true|false|yes|no|on|off|[0-9]) IS_FLAG=true ;;
-              *) IS_FLAG=false ;;
-            esac
-            if [ "$IS_FLAG" = true ]; then
-              echo "::warning title=Flag in e2e_secrets::${key} holds a flag value, not a secret, so it is not masked (masking it would hide that text throughout the log). Move it to e2e_env_vars."
-            elif [[ "$value" != *$'\n'* ]]; then
-              # Single-line secret: mask the whole value
-              echo "::add-mask::$value"
-            else
-              # Multi-line secret: mask line-by-line (::add-mask:: doesn't handle embedded newlines)
-              while IFS= read -r line; do
-                [ -n "$line" ] && echo "::add-mask::$line"
-              done <<< "$value"
-            fi
-            DELIM="EOF_$(openssl rand -hex 8)"
-            {
-              echo "${key}<<${DELIM}"
-              echo "${value}"
-              echo "${DELIM}"
-            } >> "$GITHUB_ENV"
-          done < "$TEMP_FILE"
-          rm -f "$TEMP_FILE"
-          echo "✅ E2E secrets from JSON loaded and masked ($COUNT variables)"
-        else
-          echo "ℹ️  No additional E2E secrets JSON to load"
-        fi
+      run: bash "${{ github.action_path }}/load-e2e-secrets.sh"
 
     - name: Normalize E2E runtime environment
       shell: bash

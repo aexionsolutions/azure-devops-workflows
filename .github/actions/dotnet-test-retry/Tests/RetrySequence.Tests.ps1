@@ -44,6 +44,9 @@ BeforeAll {
 #!/usr/bin/env bash
 n=$(( $(cat "$FAKE_STATE/count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_STATE/count"
 echo "$*" > "$FAKE_STATE/args-$n"
+# An attempt the test did not script is a broken fixture, not a simulated infrastructure failure: record it so the
+# harness fails the test instead of letting a non-zero assertion accept it.
+if [ ! -f "$FAKE_STATE/attempt-$n.trx" ]; then echo "$n" >> "$FAKE_STATE/unexpected"; exit 97; fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --logger) case "$2" in trx*) name="${2#*LogFileName=}";; esac; shift;;
@@ -67,6 +70,10 @@ exit "$(cat "$FAKE_STATE/exit-$n")"
     & pwsh -NoProfile -File $script:RetryScript | Out-Null
     $exit = $LASTEXITCODE
     $env:PATH = ($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -ne $bin }) -join [IO.Path]::PathSeparator
+    $unexpected = Join-Path $state 'unexpected'
+    if (Test-Path $unexpected) {
+      throw ('The retry script ran dotnet for attempt(s) {0}, but the test scripted only {1}: fix the fixture.' -f ((Get-Content $unexpected) -join ', '), $Attempts.Count)
+    }
 
     $outputs = @{}
     foreach ($line in Get-Content $output) { $k, $v = $line -split '=', 2; $outputs[$k] = $v }
@@ -103,13 +110,21 @@ Describe 'Retry sequence (real script, fake dotnet)' -Skip:(-not $IsLinux) {
     Get-MergedOutcome $run 'CancelsOrder' | Should -Be 'Failed'
   }
 
-  It 'keeps it failed when the skipping retry exits non-zero too (never an infrastructure flake)' {
+  It 'keeps it failed when the skipping retries exit non-zero too (never an infrastructure flake)' {
+    # Attempt 2 only skips the failure and exits 1, so nothing new is retryable: attempt 3 re-runs the last known
+    # failure, which skips again. It never passed, so the run fails with it.
+    $quotaSkip = @{ Name = 'CancelsOrder'; Outcome = 'NotExecuted'; Message = $QuotaMessage }
     $run = Invoke-RetrySequence @(
       @{ Exit = 1; Results = @(@{ Name = 'CancelsOrder'; Outcome = 'Failed'; Message = '403' }) },
-      @{ Exit = 1; Results = @(@{ Name = 'CancelsOrder'; Outcome = 'NotExecuted'; Message = $QuotaMessage }) })
+      @{ Exit = 1; Results = @($quotaSkip) },
+      @{ Exit = 1; Results = @($quotaSkip) })
 
     $run.Exit | Should -Not -Be 0
+    $run.Attempts | Should -Be 3
+    $run.Args[2] | Should -Match 'CancelsOrder'
+    $run.Outputs['exit-code'] | Should -Be '1'
     $run.Outputs['failed-tests-last'] | Should -Be 'Suite.Feature.CancelsOrder'
+    Get-MergedOutcome $run 'CancelsOrder' | Should -Be 'Failed'
   }
 
   It 'passes when the failed test passes on retry' {
