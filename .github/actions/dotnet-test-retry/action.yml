@@ -4,6 +4,7 @@ author: 'DevOps Team'
 # v4.3.0: Fixed critical infrastructure failure detection bug
 # v4.3.2: TRX missing on retry → fall back to last known failure list instead of aborting
 # v4.4.0: Track NotExecuted/Inconclusive TRX outcomes so summary totals add up; retry NotExecuted tests
+# v4.15.1: A failure is unresolved until the test passes; a later skip neither clears it nor replaces it in the merged TRX
 # v4.13.0: Tests skipped for an exhausted provider quota (message starting "[provider-quota]") are not retried or
 #          counted as failures, and are reported separately (provider-quota-skipped-count, warning, job summary)
 
