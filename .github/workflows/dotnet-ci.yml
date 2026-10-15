@@ -136,6 +136,7 @@ on:
 
 jobs:
   build-and-unit-tests:
+    name: API build and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     permissions:
@@ -393,7 +394,7 @@ jobs:
   # build-and-unit-tests, adding its whole duration (~11 min in RavenXpress) to
   # that job. Sonar still consumes the same `web-coverage` artifact.
   web-unit-tests:
-    name: web-unit-tests
+    name: Web unit tests
     if: inputs.run_web_unit_tests == true
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
@@ -446,7 +447,7 @@ jobs:
   # Pilot (integration_build_once): builds the integration test project once for every shard. Only its output
   # folder is shared (the test assembly with every dependency copied beside it); shards run that assembly directly.
   build-integration-tests:
-    name: build-integration-tests
+    name: API integration build
     if: inputs.run_integration == true && inputs.integration_build_once == true
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -517,7 +518,7 @@ jobs:
           retention-days: 1
 
   integration-test-shards:
-    name: integration-test-shards (${{ matrix.name }})
+    name: API integration tests (${{ matrix.name }})
     # With integration_build_once off the build job is skipped, which must not skip the shards.
     if: >-
       !cancelled()
@@ -762,7 +763,7 @@ jobs:
   # Stable fan-in check. Callers can add or rebalance shards without changing
   # the externally required `integration-tests` job/check name.
   integration-tests:
-    name: integration-tests
+    name: API integration tests
     if: always() && inputs.run_integration == true
     needs: [integration-test-shards]
     runs-on: ubuntu-latest
@@ -783,6 +784,7 @@ jobs:
   # ─── Coverage Gate (runs after BOTH test jobs) ──────────────────────────────
   # Merges unit + integration coverage and enforces the threshold.
   coverage-gate:
+    name: Coverage gate
     if: always() && inputs.run_integration == true && inputs.enforce_coverage == true
     needs: [build-and-unit-tests, integration-tests]
     runs-on: ubuntu-latest
@@ -890,6 +892,7 @@ jobs:
   # Playwright and Reqnroll are functional E2E suites and do not currently emit
   # source coverage, so they are intentionally outside this aggregation.
   sonar-analysis:
+    name: Sonar analysis
     if: >-
       always()
       && inputs.sonar_enabled == true
