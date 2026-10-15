@@ -23,7 +23,7 @@ inputs:
     required: false
     default: '600'
   max-failures:
-    description: Stop each smoke run after this many failed test attempts (playwright test --max-failures; retries count). The caller's smoke npm scripts must run `playwright test`. 0 disables the limit.
+    description: Stop each smoke run once this many tests are still failing after their retries (playwright test --max-failures; a test counts only when it has no retries left, and tests already running finish). The caller's smoke npm scripts must run `playwright test`. 0 disables the limit.
     required: false
     default: '10'
 runs:

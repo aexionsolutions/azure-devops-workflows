@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Playwright failure limit:** `web-e2e-ci.yml` and `web-e2e-deployed.yml`
   accept `playwright_max_failures` (default 10; 0 disables), passed as
   `npx playwright test --max-failures`. The `playwright-smoke` action accepts
-  `max-failures` (default 10) for both smoke scripts. Retries count as
-  failures, and the limit applies per Playwright job, so per shard. A broken
-  build used to run every test to its timeout on every retry (one RavenXpress
-  run: 47+ minutes against about 9 normally).
+  `max-failures` (default 10) for both smoke scripts. The limit counts tests
+  still failing after their retries (Playwright 1.48+), so with 2 retries a
+  limit of 10 allows about 30 failed runs; tests already running finish. It
+  applies per Playwright job, so per shard. A broken build used to run every
+  test to its timeout on every retry (one RavenXpress run: 47+ minutes against
+  about 9 normally).
 - **Job timeouts:** every job in `dotnet-ci.yml`, `web-ci.yml` and
   `web-e2e-ci.yml` now has `timeout-minutes` (previously GitHub's 6-hour
   default). Long-running jobs take `job_timeout_minutes` (default 45 in

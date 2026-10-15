@@ -125,7 +125,7 @@ on:
         type: number
         default: 1
       playwright_max_failures:
-        description: 'Stop a Playwright run after this many failed test attempts (npx playwright test --max-failures; retries count). Applies per Playwright job, so per shard. 0 disables the limit. A broken build otherwise runs every test to its timeout on every retry.'
+        description: 'Stop a Playwright run once this many tests are still failing after their retries (npx playwright test --max-failures). A test counts only when it has no retries left, so with 2 retries a limit of 10 allows about 30 failed runs, and tests already running finish. Applies per Playwright job, so per shard. 0 disables the limit. A broken build otherwise runs every test to its timeout on every retry.'
         required: false
         type: number
         default: 10
@@ -1010,7 +1010,7 @@ jobs:
           # A broken build fails every test, each on every retry, each only after its timeout: stop early instead.
           if [ "${PLAYWRIGHT_MAX_FAILURES:-0}" -gt 0 ]; then
             PLAYWRIGHT_ARGS+=(--max-failures="$PLAYWRIGHT_MAX_FAILURES")
-            echo "ℹ️  Stops after $PLAYWRIGHT_MAX_FAILURES failed test attempts"
+            echo "ℹ️  Stops once $PLAYWRIGHT_MAX_FAILURES tests are still failing after their retries"
           fi
 
           if [ "${{ inputs.run_smoke_only }}" = "true" ]; then

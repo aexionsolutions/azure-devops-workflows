@@ -259,7 +259,7 @@ concurrency_group: ravenxpress-api-build
 | `run_playwright_tests` | ❌ | Run Playwright tests | `true` (default) | - |
 | `parallel_suites` | ❌ | Run Reqnroll and Playwright as separate parallel jobs, each with its own database, API and web. Off keeps the single `E2E Tests` job | `false` (default) | - |
 | `playwright_shards` | ❌ | With `parallel_suites`, split Playwright across N parallel jobs (`--shard=i/N`), 1-8 | `1` (default) | - |
-| `playwright_max_failures` | ❌ | Stop Playwright after N failed test attempts (`--max-failures`; retries count; per Playwright job, so per shard). `0` disables | `10` (default) | - |
+| `playwright_max_failures` | ❌ | Stop Playwright once N tests are still failing after their retries (`--max-failures`; per Playwright job, so per shard; tests already running finish). `0` disables | `10` (default) | - |
 | `job_timeout_minutes` | ❌ | Timeout for each E2E job | `45` (default) | - |
 | `postgres_db` | ❌ | Database name (override preset) | `e2e_test` | Auto: `Tems_test` |
 | `api_port` | ❌ | API port (override preset) | `5100` | Auto: `5000` |
@@ -342,7 +342,7 @@ jobs:
 | `playwright_project` | ❌ | Playwright project | `chromium`, `firefox` |
 | `e2e_retry_attempts` | ❌ | Retry attempts | `3` (default for deployed) |
 | `playwright_retry_attempts` | ❌ | Playwright retry attempts | `2` (default) |
-| `playwright_max_failures` | ❌ | Stop Playwright after N failed test attempts (`--max-failures`; retries count). `0` disables | `10` (default) |
+| `playwright_max_failures` | ❌ | Stop Playwright once N tests are still failing after their retries (`--max-failures`; tests already running finish). `0` disables | `10` (default) |
 | `playwright_install_timeout_minutes` | ❌ | Maximum time for Playwright browser/system dependency install | `15` (default) |
 | `e2e_enable_video` | ❌ | Capture video recordings | `false` (default) |
 | `health_check_enabled` | ❌ | Health checks before tests | `true` (default) |
