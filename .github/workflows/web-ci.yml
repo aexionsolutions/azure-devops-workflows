@@ -42,9 +42,15 @@ jobs:
 
       - name: Install deps
         working-directory: ${{ inputs.working_directory }}
+        # Install exactly what the committed lockfile records. Deleting it and resolving afresh tested a different
+        # dependency tree each run, and broke whenever the registry did ("Cannot read properties of null (reading
+        # 'edgesOut')", RavenXpress, 2026-10-15). Callers without a lockfile still resolve with npm install.
         run: |
-          rm -f package-lock.json
-          npm install
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Lint (if present)
         working-directory: ${{ inputs.working_directory }}
