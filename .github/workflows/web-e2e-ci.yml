@@ -270,10 +270,10 @@ jobs:
           path: ./api-publish
           retention-days: 1
 
-  # Checks the request before the E2E job starts. (Kept as its own job so the "Plan E2E" check callers see is
-  # unchanged; the parallel entry point, web-e2e-parallel-ci.yml, plans its Playwright shards here.)
+  # Checks the request before the E2E job starts. (Kept as its own job so both entry points show the same "Plan"
+  # check; the parallel entry point, web-e2e-parallel-ci.yml, plans its Playwright shards here.)
   plan-e2e:
-    name: Plan E2E
+    name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -287,14 +287,14 @@ jobs:
           if [ "$HAS_REQNROLL" != "true" ] && [ "$HAS_PLAYWRIGHT" != "true" ]; then
             echo "::warning::Neither a Reqnroll project (e2e_project) nor Playwright tests (run_playwright_tests) were requested; the E2E job will only start the stack."
           fi
-          echo "E2E Tests runs: Reqnroll=$HAS_REQNROLL, then Playwright=$HAS_PLAYWRIGHT, in one job."
+          echo "This job runs Reqnroll=$HAS_REQNROLL, then Playwright=$HAS_PLAYWRIGHT."
 
   # Every suite in one job, Reqnroll first. A failing Reqnroll run stops the job before Playwright, as it always has.
   # Setup, suite runners and teardown are the composite actions web-e2e-parallel-ci.yml uses too (e2e-start-stack,
   # e2e-run-reqnroll, e2e-run-playwright, e2e-stop-stack). For a job per suite and per Playwright shard, call
   # web-e2e-parallel-ci.yml instead.
   e2e-tests:
-    name: E2E Tests
+    name: Reqnroll and Playwright
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]

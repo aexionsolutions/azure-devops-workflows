@@ -217,7 +217,7 @@ concurrency_group: ravenxpress-api-build
 |-------|----------|-------------|---------|
 | `solution` | ✅ | Path to .sln file | `Ems.sln` |
 | `web_working_directory` | ❌ | Web tests directory | `web/tems-portal` |
-| `run_web_unit_tests` | ❌ | Enable web tests. They run with coverage in their own `web-unit-tests` job, in parallel with `build-and-unit-tests` | `true` |
+| `run_web_unit_tests` | ❌ | Enable web tests. They run with coverage in their own `Web unit tests` job, in parallel with `API build and unit tests` | `true` |
 | `js_lcov_path` | ✅ | Path to lcov.info | `web/tems-portal/coverage/lcov.info` |
 | `sonar_exclusions` | ✅ | File exclusions | See examples above |
 | `sonar_coverage_exclusions` | ✅ | Coverage exclusions | See examples above |
@@ -226,7 +226,7 @@ concurrency_group: ravenxpress-api-build
 | `pr_head` | ❌ | PR head branch | `${{ github.head_ref }}` |
 | `pr_base` | ❌ | PR base branch | `${{ github.base_ref }}` |
 | `coverage_exclude_by_file` | ❌ | Files the coverage collector never instruments (coverlet `ExcludeByFile`, comma-separated globs), in the unit and integration runs | `**/Migrations/*.cs` |
-| `node_version` | ❌ | Node.js version for `web-unit-tests` and Sonar | `'20'` (default) |
+| `node_version` | ❌ | Node.js version for `Web unit tests` and Sonar | `'20'` (default) |
 | `job_timeout_minutes` | ❌ | Timeout for each long-running job (build and unit tests, web unit tests, each integration shard, Sonar) | `45` (default) |
 | `integration_build_once` | ❌ | Pilot: build the integration test project once and have every shard run the shared build instead of building the solution itself | `false` (default) |
 
@@ -243,8 +243,8 @@ concurrency_group: ravenxpress-api-build
 
 Two entry points to the same full-stack E2E setup (shared as composite actions), with the same inputs:
 
-- **`web-e2e-ci.yml`**: every suite in one `E2E Tests` job, Reqnroll first, then Playwright.
-- **`web-e2e-parallel-ci.yml`**: `E2E Tests (reqnroll)` and one `E2E Tests (playwright…)` job per shard, each with
+- **`web-e2e-ci.yml`**: every suite in one `Reqnroll and Playwright` job, Reqnroll first, then Playwright.
+- **`web-e2e-parallel-ci.yml`**: a `Reqnroll` job and one `Playwright N of M` job per shard, each with
   its own database, API and web. Takes `playwright_shards` (1-8).
 
 Each runs only its own jobs, so neither shows the other's jobs as skipped. (Until v5.0.0 one workflow did both, chosen

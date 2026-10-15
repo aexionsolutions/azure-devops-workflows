@@ -28,6 +28,7 @@ on:
 jobs:
   # Lints, unit-tests (when run_tests) and builds the web app. Browser (E2E) tests run in web-e2e-ci.yml.
   web-ci:
+    name: ${{ inputs.run_tests && 'Lint, unit tests and build' || 'Lint and build' }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     steps:

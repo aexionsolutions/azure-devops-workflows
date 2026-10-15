@@ -278,7 +278,7 @@ jobs:
   # Plans the Playwright shard jobs (and whether a Reqnroll job runs). Every planned job has its own database, API and
   # web, so suites and shards never share data.
   plan-e2e:
-    name: Plan E2E
+    name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -301,8 +301,8 @@ jobs:
           LEGS='[]'
           if [ "$HAS_PLAYWRIGHT" = "true" ]; then
             for i in $(seq 1 "$SHARDS"); do
-              if [ "$SHARDS" -gt 1 ]; then NAME="playwright-$i-of-$SHARDS"; SHARD="$i/$SHARDS"; else NAME="playwright"; SHARD=""; fi
-              LEGS=$(jq -c --arg n "$NAME" --arg s "$SHARD" '. + [{"leg":$n,"shard":$s,"suffix":("-" + $n)}]' <<< "$LEGS")
+              if [ "$SHARDS" -gt 1 ]; then NAME="playwright-$i-of-$SHARDS"; LABEL="Playwright $i of $SHARDS"; SHARD="$i/$SHARDS"; else NAME="playwright"; LABEL="Playwright"; SHARD=""; fi
+              LEGS=$(jq -c --arg n "$NAME" --arg l "$LABEL" --arg s "$SHARD" '. + [{"leg":$n,"label":$l,"shard":$s,"suffix":("-" + $n)}]' <<< "$LEGS")
             done
           fi
           if [ "$HAS_REQNROLL" != "true" ] && [ "$LEGS" = "[]" ]; then
@@ -320,7 +320,7 @@ jobs:
 
   # The Reqnroll suite in its own job.
   e2e-reqnroll:
-    name: E2E Tests (reqnroll)
+    name: Reqnroll
     if: needs.plan-e2e.outputs.run_reqnroll == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
@@ -458,7 +458,7 @@ jobs:
 
   # The Playwright suite in its own job, one per shard.
   e2e-playwright:
-    name: E2E Tests (${{ matrix.leg }})
+    name: ${{ matrix.label }}
     if: needs.plan-e2e.outputs.playwright_legs != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
