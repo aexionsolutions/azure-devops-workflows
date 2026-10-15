@@ -409,9 +409,13 @@ jobs:
 
       - name: Web unit tests + coverage (vitest)
         working-directory: caller/${{ inputs.web_working_directory }}
+        # Install exactly what the committed lockfile records (see web-ci.yml); without one, resolve with npm install.
         run: |
-          rm -f package-lock.json
-          npm install
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
           npm run test:ci
 
       - name: Upload web coverage artifact
