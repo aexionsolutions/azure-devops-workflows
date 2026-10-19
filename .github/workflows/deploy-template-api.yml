@@ -101,6 +101,8 @@ on:
         required: false
       B2C_SMOKE_CLIENT_ID:
         required: false
+      B2C_SMOKE_CLIENT_SECRET:
+        required: false
       AAD_B2C_AUTHORITY:
         required: false
       AAD_B2C_API_SCOPE:
@@ -452,7 +454,48 @@ jobs:
           echo "b2c_authority=$AUTH_B2C" >> $GITHUB_OUTPUT
           echo "client_id=$CLIENT_ID" >> $GITHUB_OUTPUT
 
-      - name: Mint token for protected smoke (B2C ROPC for all environments)
+      - name: Resolve protected smoke authentication flow
+        id: smokeauth
+        shell: bash
+        env:
+          AUTHORITY: ${{ inputs.b2c_authority || secrets.AAD_B2C_AUTHORITY || steps.apisettings.outputs.b2c_authority }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          try {
+            const url = new URL(process.env.AUTHORITY);
+            if (url.protocol !== 'https:') throw new Error();
+            const external = url.hostname.endsWith('.ciamlogin.com');
+            if (!external && !url.hostname.endsWith('.b2clogin.com')) throw new Error();
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `external_id=${external}\n`);
+          } catch { console.error('Invalid protected smoke authority.'); process.exitCode = 1; }
+          NODE
+
+      - name: Set up Node for External ID smoke
+        if: steps.smokeauth.outputs.external_id == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Prepare External ID browser verification
+        if: steps.smokeauth.outputs.external_id == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f caller/rx-web/package-lock.json ]; then
+            WEB=caller/rx-web
+          elif [ -f caller/web/tems-portal/package-lock.json ]; then
+            WEB=caller/web/tems-portal
+          else
+            echo '::error::External ID smoke requires the caller browser helper and a locked Playwright web package.'
+            exit 1
+          fi
+          test -f caller/tools/e2e/external-id-browser-token.cjs
+          npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
+          cd "$WEB"
+          npx --no-install playwright install --with-deps chromium
+
+      - name: Acquire delegated token for protected smoke
         id: token
         shell: bash
         env:
@@ -465,6 +508,7 @@ jobs:
           B2C_SCOPE_INPUT: ${{ inputs.b2c_scope }}
           B2C_SCOPE_SECRET: ${{ secrets.AAD_B2C_API_SCOPE }}
           SMOKE_CLIENT_ID: ${{ inputs.b2c-smoke-client-id || secrets.B2C_SMOKE_CLIENT_ID }}
+          SMOKE_CLIENT_SECRET: ${{ secrets.B2C_SMOKE_CLIENT_SECRET }}
           TEST_USER_EMAIL: ${{ secrets.B2C_TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ secrets.B2C_TEST_USER_PASSWORD }}
           KV_URL: ${{ inputs['b2c-kv-url'] }}
@@ -472,7 +516,7 @@ jobs:
           ENV_NAME: ${{ inputs.environment }}
         run: |
           set -euo pipefail
-          echo "🔐 Using B2C ROPC (password grant) for token minting..."
+          echo "Resolving protected smoke authentication configuration..."
           AUTH_B2C_FROM_INPUTS=no
           AUTH_B2C_FROM_SECRETS=no
           AUTH_B2C_FROM_APP=no
@@ -566,7 +610,7 @@ jobs:
           if [[ "$SCOPE" != *"openid"* ]]; then SCOPE="$SCOPE openid"; fi
           if [[ "$SCOPE" != *"offline_access"* ]]; then SCOPE="$SCOPE offline_access"; fi
           if [ -z "$SMOKE_CLIENT_ID" ]; then
-            echo "❌ ERROR: B2C_SMOKE_CLIENT_ID secret is required for ROPC authentication." >&2
+            echo "❌ ERROR: B2C_SMOKE_CLIENT_ID is required for protected smoke authentication." >&2
             exit 1
           fi
           ROPC_CLIENT_ID="$SMOKE_CLIENT_ID"
@@ -577,8 +621,16 @@ jobs:
             USER_PASSWORD=$(az keyvault secret show --vault-url "$KV_URL" -n "$KV_SECRET_NAME" --query value -o tsv 2>/dev/null || true)
           fi
           if [ -z "$USER_EMAIL" ] || [ -z "$USER_PASSWORD" ]; then
-            echo "❌ ERROR: Test user credentials required for B2C ROPC authentication." >&2
+            echo "❌ ERROR: Test user credentials required for protected smoke authentication." >&2
             exit 1
+          fi
+          # External ID customer directories do not support password grants.
+          # Use the same validated Microsoft browser flow as the caller's E2E tests.
+          if [[ "$TOKEN_URL" == https://*.ciamlogin.com/* ]]; then
+            export EXTERNAL_ID_AUTHORITY="$AUTH_B2C" EXTERNAL_ID_SCOPE="$SCOPE"
+            export TEST_USER_EMAIL="$USER_EMAIL" TEST_USER_PASSWORD="$USER_PASSWORD"
+            node "$GITHUB_WORKSPACE/shared/.github/scripts/mint-external-id-smoke.cjs"
+            exit 0
           fi
           echo "Minting B2C token via ROPC (password grant) against $TOKEN_URL"
           ATTEMPTS=5
