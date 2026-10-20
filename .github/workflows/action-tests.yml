@@ -16,6 +16,15 @@ permissions:
   contents: read
 
 jobs:
+  postgres-start:
+    name: PostgreSQL startup contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: node --test .github/actions/postgres-start-wait/startup.test.cjs
   pester:
     name: Pester (action scripts)
     runs-on: ubuntu-latest

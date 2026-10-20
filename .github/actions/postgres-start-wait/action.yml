@@ -1,6 +1,6 @@
 name: Postgres Start & Wait (Flexible Server)
 
-description: Starts an Azure PostgreSQL Flexible Server (if present) and waits until Ready.
+description: Starts the required Azure PostgreSQL Flexible Server and waits until Ready. Metadata lookup failures are fatal.
 
 inputs:
   resource-group:
@@ -40,11 +40,15 @@ runs:
         NON_BLOCKING: ${{ inputs.non-blocking }}
         API_VER: ${{ inputs.api-version }}
       run: |
-        set -e
+        set -euo pipefail
         SUB_ID=$(az account show --query id -o tsv)
-        # Check existence
-        if ! az resource show -g "$RG" -n "$PG_NAME" --resource-type Microsoft.DBforPostgreSQL/flexibleServers 1>/dev/null 2>&1; then
-          echo "Postgres server $PG_NAME not found in RG $RG; skipping.";
+        SERVER_URL="https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME?api-version=$API_VER"
+        # Use the same explicit API version for existence and state. A failed
+        # lookup (including authorization, API-version or missing-resource errors)
+        # cannot establish absence and must never report successful startup.
+        STATE=$(az rest --method get --url "$SERVER_URL" --query properties.state -o tsv)
+        if [ "$STATE" = "Ready" ]; then
+          echo "Postgres is already Ready."
           exit 0
         fi
         # Attempt to start (best-effort; may fail if server is mid-transition)
@@ -57,8 +61,8 @@ runs:
         start_issued=true
         for i in $(seq 1 "$ATTEMPTS"); do
           STATE=$(az rest --method get \
-            --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.DBforPostgreSQL/flexibleServers/$PG_NAME?api-version=$API_VER" \
-            --query properties.state -o tsv || echo "")
+            --url "$SERVER_URL" \
+            --query properties.state -o tsv)
           echo "[$i/$ATTEMPTS] PG state: ${STATE:-<unknown>}"
           if [ "$STATE" = "Ready" ]; then ready=true; break; fi
           # If server finished stopping/is stopped, re-issue start
