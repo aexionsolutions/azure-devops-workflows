@@ -30,6 +30,28 @@ The `web-e2e-deployed.yml` reusable workflow runs end-to-end tests against **alr
 
 ## Basic Usage
 
+### Azure OIDC and GitHub environments
+
+When Azure trusts an environment subject, pass `environment_name` (for example
+`dev`). The deployed E2E job binds to that GitHub environment, applying its
+protection rules and secrets and requesting the matching OIDC subject:
+`repo:OWNER/REPOSITORY:environment:dev`. Merely setting `ENVIRONMENT` or loading
+`appsettings.dev.json` does not establish that binding.
+
+Keep `id-token: write` on the caller and supply the Azure client, tenant and
+subscription IDs. An omitted environment retains a non-environment identity;
+its branch/tag or pull-request subject needs its own explicitly configured
+trust. Do not broaden trust to unrelated branches to work around a missing job
+environment. Environment secrets can override identically named passed secrets.
+
+For an existing failed run, `AADSTS700213` identifies a federation mismatch.
+An additional `AADSTS7000222` means a secret fallback also expired; repairing
+the OIDC path avoids depending on that expired secret. Re-running a job pinned
+to an old shared-workflow ref does not consume a subsequent fix: update both
+the caller's `uses` ref and `shared_ref`, then start a new test invocation.
+
+See [GitHub's OIDC subject reference](https://docs.github.com/en/actions/reference/security/oidc#example-subject-claims).
+
 ### Minimum Required Inputs
 
 ```yaml
