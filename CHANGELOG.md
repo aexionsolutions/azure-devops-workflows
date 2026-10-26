@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Deployed E2E jobs now inherit the named GitHub environment's protection rules,
+  including required reviewers and deployment-branch restrictions. Adding required
+  reviewers can introduce a separate approval for E2E after deployment.
+
 ### Added
 
 - **`dotnet-test-retry`: opt-in skips are not retried, and are reported.** A test
