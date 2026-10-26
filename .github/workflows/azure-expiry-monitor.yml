@@ -1,0 +1,77 @@
+name: Azure certificate and credential expiry
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      monitor_ref:
+        description: Immutable shared repository commit containing this monitor
+        required: true
+        type: string
+      applications_json:
+        description: Entra application IDs in the login directory
+        required: true
+        type: string
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+jobs:
+  monitor:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: aexionsolutions/azure-devops-workflows
+          ref: ${{ inputs.monitor_ref }}
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Write metadata target configuration
+        env:
+          SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          APPLICATIONS: ${{ inputs.applications_json }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('azure-targets.json').write_text(json.dumps({'subscriptions': [os.environ['SUBSCRIPTION']], 'applications': json.loads(os.environ['APPLICATIONS'])}))
+          PY
+      - name: Check expiry metadata
+        run: python3 tools/expiry-monitor/monitor.py --config azure-targets.json --azure
+      - name: Preserve metadata report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: azure-expiry-report
+          path: expiry-report.*
+          retention-days: 30
+      - name: Maintain expiry alert
+        if: always()
+        uses: actions/github-script@v8
+        env:
+          MONITOR_STATUS: ${{ job.status }}
+          MONITOR_ENV: ${{ inputs.environment }}
+        with:
+          script: |
+            const title = `[expiry-monitor] Azure ${process.env.MONITOR_ENV} needs attention`;
+            const {owner, repo} = context.repo;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {owner, repo, state: 'open', creator: 'github-actions[bot]', per_page: 100});
+            const existing = issues.find(i => !i.pull_request && i.title === title);
+            if (process.env.MONITOR_STATUS !== 'success') {
+              const body = `Expiry warning or incomplete Azure check. Review the metadata report and logs: https://github.com/${owner}/${repo}/actions/runs/${context.runId}\n\nAn authentication or permission failure is a coverage gap, not a healthy result. Validate renewal and dependent applications before retiring a credential.`;
+              if (existing) await github.rest.issues.update({owner, repo, issue_number: existing.number, body});
+              else await github.rest.issues.create({owner, repo, title, body});
+            } else if (existing) await github.rest.issues.update({owner, repo, issue_number: existing.number, state: 'closed'});
