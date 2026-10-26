@@ -136,7 +136,7 @@ on:
       
       # Environment Configuration
       environment_name:
-        description: 'Environment name (dev, uat, preprod, prod) - used for loading appsettings.{env}.json'
+        description: 'GitHub deployment environment (dev, uat, preprod, prod), also used for appsettings.{env}.json. Selects environment secrets/protections and the environment-scoped OIDC subject.'
         required: false
         type: string
         default: ''
@@ -238,6 +238,9 @@ jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
     runs-on: ubuntu-latest
+    # Passing a name only as an input/env variable does not bind the GitHub job.
+    # Match the caller's environment-scoped Azure federation and protections.
+    environment: ${{ inputs.environment_name }}
     timeout-minutes: 60
     # Grant permissions for Azure workload identity (OIDC)
     permissions:
