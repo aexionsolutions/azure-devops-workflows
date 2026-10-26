@@ -1,0 +1,44 @@
+name: Public certificate expiry
+on:
+  schedule:
+    - cron: '15 11 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths: ['tools/expiry-monitor/**', '.github/workflows/expiry-monitor.yml', '.github/workflows/azure-expiry-monitor.yml']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test monitor
+        run: python3 -m unittest discover -s tools/expiry-monitor -v
+      - name: Check live public TLS certificates
+        if: github.event_name != 'pull_request'
+        run: python3 tools/expiry-monitor/monitor.py --config tools/expiry-monitor/public.json
+      - name: Preserve metadata report
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: public-expiry-report
+          path: expiry-report.*
+          retention-days: 30
+      - name: Maintain expiry alert
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/github-script@v8
+        env:
+          MONITOR_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const title = '[expiry-monitor] Public TLS needs attention';
+            const {owner, repo} = context.repo;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {owner, repo, state: 'open', creator: 'github-actions[bot]', per_page: 100});
+            const existing = issues.find(i => !i.pull_request && i.title === title);
+            if (process.env.MONITOR_STATUS !== 'success') {
+              const body = `Expiry warning or incomplete check. Review the metadata report and logs: https://github.com/${owner}/${repo}/actions/runs/${context.runId}\n\nCheck the served certificate, renewal job and binding. Do not replace secrets blindly. This issue stays open until a complete successful scan.`;
+              if (existing) await github.rest.issues.update({owner, repo, issue_number: existing.number, body});
+              else await github.rest.issues.create({owner, repo, title, body});
+            } else if (existing) await github.rest.issues.update({owner, repo, issue_number: existing.number, state: 'closed'});
