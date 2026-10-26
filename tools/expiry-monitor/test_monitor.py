@@ -31,6 +31,28 @@ class MonitorTests(unittest.TestCase):
         result = monitor.collect({"subscriptions": ["subscription"]}, azure=True)
         self.assertEqual(result["items"][0]["status"], "unavailable")
 
+    @patch("monitor.az")
+    def test_certificate_failure_does_not_skip_vaults_and_only_lists_metadata(self, az):
+        az.side_effect = [["certificate-id"], RuntimeError("denied"), ["vault"],
+                          [{"id": "secret-id", "end": None}], [], []]
+        result = monitor.collect({"subscriptions": ["subscription"]}, azure=True)
+        self.assertEqual([(r["kind"], r["status"]) for r in result["items"]],
+                         [("appservice-certificate", "unavailable"), ("keyvault-secret", "unknown")])
+        calls = [call.args for call in az.call_args_list]
+        self.assertIn(("resource", "list", "--subscription", "subscription", "--resource-type",
+                       "Microsoft.Web/certificates", "--query", "[].id"), calls)
+        vault_calls = [call for call in calls if call[0] == "keyvault" and call[1] in {"secret", "key", "certificate"}]
+        self.assertEqual(len(vault_calls), 3)
+        self.assertTrue(all(call[2] == "list" for call in vault_calls))
+
+    @patch("monitor.subprocess.run")
+    def test_azure_errors_do_not_include_provider_output(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stderr = "sensitive response"
+        with self.assertRaisesRegex(RuntimeError, "metadata query failed") as caught:
+            monitor.az("ad", "app", "show")
+        self.assertNotIn("sensitive", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
