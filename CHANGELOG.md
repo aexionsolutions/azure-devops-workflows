@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bind deployed E2E jobs to `environment_name` so environment-scoped Azure OIDC
+  authentication, secrets and protection rules apply. Previously only application
+  configuration used this input, so Azure saw a branch subject and could reject
+  an otherwise correctly configured environment trust.
+
 - **`dotnet-test-retry`: "no failures" is no longer told from "no TRX" by
   `$null`.** PowerShell returns an empty failure list as `$null`, so the two
   were indistinguishable and the script's "non-zero exit but no recorded
