@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Deployed E2E jobs now inherit the named GitHub environment's protection rules,
-  including required reviewers and deployment-branch restrictions. Adding required
-  reviewers can introduce a separate approval for E2E after deployment.
-
 ### Added
 
 - **`dotnet-test-retry`: opt-in skips are not retried, and are reported.** A test
@@ -23,11 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without the marker is still retried, since it may hide a hook failure.
 
 ### Fixed
-
-- Bind deployed E2E jobs to `environment_name` so environment-scoped Azure OIDC
-  authentication, secrets and protection rules apply. Previously only application
-  configuration used this input, so Azure saw a branch subject and could reject
-  an otherwise correctly configured environment trust.
 
 - **`dotnet-test-retry`: "no failures" is no longer told from "no TRX" by
   `$null`.** PowerShell returns an empty failure list as `$null`, so the two
@@ -365,6 +354,21 @@ concurrency_group: tems-api-build
 ```
 
 ---
+
+## [6.1.3]
+
+### Changed
+
+- Deployed E2E jobs now inherit the named GitHub environment's protection rules,
+  including required reviewers and deployment-branch restrictions. Adding required
+  reviewers can introduce a separate approval for E2E after deployment.
+
+### Fixed
+
+- Bind deployed E2E jobs to `environment_name` so environment-scoped Azure OIDC
+  authentication, secrets and protection rules apply. Previously only application
+  configuration used this input, so Azure saw a branch subject and could reject
+  an otherwise correctly configured environment trust.
 
 ## [1.0.0] - 2026-01-10
 
