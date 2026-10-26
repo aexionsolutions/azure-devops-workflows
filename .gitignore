@@ -18,3 +18,5 @@ yarn-error.log*
 *.tmp
 *.temp
 .temp/
+__pycache__/
+expiry-report.*

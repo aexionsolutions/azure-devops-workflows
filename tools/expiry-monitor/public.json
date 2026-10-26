@@ -1,0 +1,8 @@
+{
+  "hosts": [
+    "ravenxpress.com", "www.ravenxpress.com", "dev.ravenxpress.com",
+    "rxqa-a-20261023.dev.ravenxpress.com", "rxqa-b-20261023.dev.ravenxpress.com",
+    "temstrade.com", "www.temstrade.com", "dev.temstrade.com",
+    "aexionsolutions.com", "www.aexionsolutions.com"
+  ]
+}
