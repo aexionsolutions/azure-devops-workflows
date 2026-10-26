@@ -37,7 +37,7 @@ class MonitorTests(unittest.TestCase):
                           [{"id": "secret-id", "end": None}], [], []]
         result = monitor.collect({"subscriptions": ["subscription"]}, azure=True)
         self.assertEqual([(r["kind"], r["status"]) for r in result["items"]],
-                         [("appservice-certificate", "unavailable"), ("keyvault-secret", "unknown")])
+                         [("appservice-certificate", "unavailable"), ("keyvault-secret", "no-expiry")])
         calls = [call.args for call in az.call_args_list]
         self.assertIn(("resource", "list", "--subscription", "subscription", "--resource-type",
                        "Microsoft.Web/certificates", "--query", "[].id"), calls)
@@ -52,6 +52,16 @@ class MonitorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "metadata query failed") as caught:
             monitor.az("ad", "app", "show")
         self.assertNotIn("sensitive", str(caught.exception))
+
+
+    @patch("monitor.az")
+    def test_no_expiry_is_informational_only_for_vault_keys_and_secrets(self, az):
+        az.side_effect = [[], ["vault"], [{"id": "secret", "end": None}],
+                          [{"id": "key", "end": None}], [{"id": "certificate", "end": None}]]
+        rows = monitor.collect({"subscriptions": ["subscription"]}, azure=True)["items"]
+        self.assertEqual([r["status"] for r in rows], ["no-expiry", "no-expiry", "unknown"])
+        self.assertTrue(all(r["status"] in monitor.NON_FAILING for r in rows[:2]))
+        self.assertNotIn(rows[2]["status"], monitor.NON_FAILING)
 
 
 if __name__ == "__main__":

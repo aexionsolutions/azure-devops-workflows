@@ -12,6 +12,7 @@ import shutil
 import sys
 
 UTC = dt.timezone.utc
+NON_FAILING = {"healthy", "no-expiring-credentials", "no-expiry"}
 
 
 def classify(expires, now):
@@ -50,6 +51,8 @@ def collect(config, azure=False):
 
     def add(kind, name, expiry, **extra):
         status, days = classify(expiry, now)
+        if not expiry and kind in {"keyvault-secret", "keyvault-key"}:
+            status = "no-expiry"
         rows.append(dict(kind=kind, name=name, expires=expiry, days=days, status=status, **extra))
 
     def guarded(kind, name, action):
@@ -125,7 +128,7 @@ def main():
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
             summary.write(rendered)
     print(rendered)
-    return int(any(item["status"] not in {"healthy", "no-expiring-credentials"} for item in report["items"]))
+    return int(any(item["status"] not in NON_FAILING for item in report["items"]))
 
 
 if __name__ == "__main__":
