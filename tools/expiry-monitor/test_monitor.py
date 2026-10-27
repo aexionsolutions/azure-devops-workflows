@@ -1,7 +1,12 @@
 import datetime as dt
+import json
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 import monitor
+import jmespath
 
 
 class MonitorTests(unittest.TestCase):
@@ -62,6 +67,54 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual([r["status"] for r in rows], ["no-expiry", "no-expiry", "unknown"])
         self.assertTrue(all(r["status"] in monitor.NON_FAILING for r in rows[:2]))
         self.assertNotIn(rows[2]["status"], monitor.NON_FAILING)
+
+
+    @patch("monitor.subprocess.run")
+    def test_real_key_list_shape_writes_json_markdown_and_summary(self, run):
+        # Raw Azure CLI shapes, before --query projection. Keys have kid, not id.
+        raw = {"key": [{"kid": "https://example.vault.azure.net/keys/route-key/version",
+                        "attributes": {"enabled": True, "expires": None}}],
+               "secret": [{"id": "https://example.vault.azure.net/secrets/setting",
+                           "attributes": {"enabled": True, "expires": None}}],
+               "certificate": [{"id": "https://example.vault.azure.net/certificates/site",
+                                "attributes": {"enabled": True, "expires": "2099-01-01T00:00:00Z"}}]}
+
+        def cli(command, **kwargs):
+            offset = command.index("--query")
+            args = command[:offset]
+            query = command[offset + 1]
+            if "resource" in args:
+                data = []
+            elif "--vault-name" not in args:
+                data = [{"name": "example"}]
+            else:
+                kind = args[args.index("keyvault") + 1]
+                data = raw[kind]
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=0, stdout=json.dumps(jmespath.search(query, data)))
+
+        run.side_effect = cli
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "config.json"
+            config.write_text(json.dumps({"subscriptions": ["subscription"]}))
+            output = str(Path(folder) / "report")
+            summary = str(Path(folder) / "summary.md")
+            with patch("sys.argv", ["monitor", "--config", str(config), "--azure", "--output", output]), patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": summary}):
+                self.assertEqual(monitor.main(), 0)
+            report = json.loads(Path(output + ".json").read_text())
+            key = next(item for item in report["items"] if item["kind"] == "keyvault-key")
+            self.assertEqual(key["name"], raw["key"][0]["kid"])
+            self.assertEqual(key["status"], "no-expiry")
+            self.assertIn(key["name"], Path(output + ".md").read_text(encoding="utf-8"))
+            self.assertEqual(Path(summary).read_text(encoding="utf-8"), Path(output + ".md").read_text(encoding="utf-8"))
+
+    def test_missing_names_do_not_crash_or_change_finding_status(self):
+        for value in [None, "", 123]:
+            row = {"kind": "keyvault-key", "name": value, "status": "expired", "days": -2}
+            rendered = monitor.markdown({"checkedAt": "now", "items": [row]})
+            self.assertIn(str(value) if value else "(unnamed)", rendered)
+            self.assertIn("expired", rendered)
+        self.assertIn("(unnamed)", monitor.markdown({"checkedAt": "now", "items": [{"kind": "tls", "status": "unknown", "days": None}]}))
 
 
 if __name__ == "__main__":

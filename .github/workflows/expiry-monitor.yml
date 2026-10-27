@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Install CLI query regression test dependency
+        run: python3 -m pip install -r tools/expiry-monitor/requirements-test.txt
       - name: Test monitor
         run: python3 -m unittest discover -s tools/expiry-monitor -v
       - name: Check live public TLS certificates
