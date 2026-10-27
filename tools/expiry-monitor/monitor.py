@@ -91,8 +91,9 @@ def collect(config, azure=False):
                 for vault in vaults:
                     for kind in ["secret", "key", "certificate"]:
                         def items(vault=vault, kind=kind):
+                            identifier = "kid" if kind == "key" else "id"
                             values = az("keyvault", kind, "list", "--vault-name", vault,
-                                        "--query", "[?attributes.enabled!=`false`].{id:id,end:attributes.expires}")
+                                        "--query", f"[?attributes.enabled!=`false`].{{id:{identifier},end:attributes.expires}}")
                             for item in values:
                                 add(f"keyvault-{kind}", item["id"], item.get("end"))
                         guarded(f"keyvault-{kind}", vault, items)
@@ -106,7 +107,7 @@ def markdown(report):
              "This report contains metadata only. GitHub secret values and external-provider credentials are not inspected.", "",
              "| Type | Resource | Status | Days remaining |", "|---|---|---|---|"]
     for item in report["items"]:
-        name = item["name"].replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+        name = str(item.get("name") or "(unnamed)").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
         lines.append(f"| {item['kind']} | {name} | {item['status']} | {item['days'] if item['days'] is not None else '—'} |")
     return "\n".join(lines) + "\n"
 
