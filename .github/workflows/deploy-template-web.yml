@@ -34,6 +34,16 @@ on:
         required: false
         type: string
         default: ''
+      warmup-timeout-minutes:
+        description: 'HTTP readiness budget per phase; no warm-up restarts (1-60 minutes).'
+        required: false
+        type: number
+        default: 20
+      clean-node-runtime:
+        description: 'Opt in to bounded generated-cache/Oryx cleanup for a prebuilt Next standalone package.'
+        required: false
+        type: boolean
+        default: false
       expect-version:
         required: false
         type: string
@@ -88,6 +98,16 @@ on:
       AZURE_SUBSCRIPTION_ID:
         required: false
       AZURE_CREDENTIALS:
+        required: false
+      AZURE_RESOURCE_GROUP:
+        required: false
+      AZURE_RG_DEV:
+        required: false
+      AZURE_RG_UAT:
+        required: false
+      AZURE_RG_PREPROD:
+        required: false
+      AZURE_RG_PROD:
         required: false
       B2C_TEST_USER_EMAIL:
         required: false
@@ -317,6 +337,8 @@ jobs:
           use-slot: ${{ steps.resolve.outputs.use_slot }}
           warmup-url-staging: ${{ inputs['warmup-url-staging'] }}
           warmup-url-prod: ${{ inputs['warmup-url-prod'] }}
+          warmup-timeout-minutes: ${{ inputs['warmup-timeout-minutes'] }}
+          clean-node-runtime: ${{ inputs['clean-node-runtime'] }}
           skip-swap: 'true'
           expect-version: ${{ inputs['expect-version'] }}
           version-url: ${{ inputs['version-url'] }}
@@ -613,6 +635,8 @@ jobs:
           warmup-url-staging: ${{ inputs['warmup-url-staging'] }}
           warmup-url-prod: ${{ inputs['warmup-url-prod'] }}
           skip-deploy: 'true'
+          warmup-timeout-minutes: ${{ inputs['warmup-timeout-minutes'] }}
+          clean-node-runtime: ${{ inputs['clean-node-runtime'] }}
           expect-version: ${{ inputs['expect-version'] }}
           version-url: ${{ inputs['version-url'] }}
 

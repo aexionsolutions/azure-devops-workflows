@@ -561,6 +561,9 @@ jobs:
       artifact-name: web
       warmup-url-staging: https://tems-uat-web-staging.azurewebsites.net/healthz
       warmup-url-prod: https://tems-uat-web.azurewebsites.net/healthz
+      warmup-timeout-minutes: 20
+      # Enable only for a complete Linux Next standalone package.
+      clean-node-runtime: true
       expect-version: ${{ inputs.release_tag }}
       b2c_authority: ${{ vars.AAD_B2C_AUTHORITY }}
       b2c_scope: ${{ vars.AAD_B2C_API_SCOPE }}
