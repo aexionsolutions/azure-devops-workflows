@@ -46,7 +46,9 @@ Before a Linux settings mutation, it captures the Kudu executor PID and process
 start ticks with a read-only command. It waits up to ten minutes for a different
 executor identity to respond consistently for ten seconds. Transient failures
 and further identity changes reset that stability window. An old process's HTTP
-200 does not release the gate. Unchanged settings need an available SCM process
+200 does not release the gate. If a separate setting removal is required, its
+own recycle is observed after the set operation's recycle, before upload.
+Unchanged settings need an available SCM process
 but require no recycle. Failures block upload and retain diagnostics.
 
 A job-local, target-specific preparation marker prevents the composite from

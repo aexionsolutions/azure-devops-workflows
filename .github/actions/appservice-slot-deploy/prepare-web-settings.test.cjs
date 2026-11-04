@@ -22,12 +22,15 @@ test('unchanged settings do not write or trigger a recycle', async () => {
 });
 
 test('changed settings are batched and only a replacement SCM process unlocks upload', async () => {
-  const { state, io } = fixture({ WEBSITE_RUN_FROM_PACKAGE: '1' }, ['old', 'old', new Error('recycling'), 'new', 'new', 'new']);
+  const { state, io } = fixture({ WEBSITE_RUN_FROM_PACKAGE: '1' },
+    ['old', 'old', new Error('recycling'), 'new', 'new', 'new', 'next', 'next', 'next']);
+  const remove = io.remove;
+  io.remove = async keys => { assert.ok(state.clock >= 20000, 'the first recycle must finish before the next mutation'); await remove(keys); };
   await prepareTarget({ settings: { BUILD_VERSION: 'new', ENV: 'dev' }, remove: ['WEBSITE_RUN_FROM_PACKAGE'] }, io, true);
   assert.equal(state.ready, true);
   assert.equal(state.calls.filter(x => x === 'set').length, 1);
   assert.ok(state.calls.indexOf('identity') < state.calls.indexOf('set'));
-  assert.ok(state.clock >= 20000);
+  assert.ok(state.clock >= 30000);
   assert.equal(state.current.WEBSITE_RUN_FROM_PACKAGE, undefined);
 });
 

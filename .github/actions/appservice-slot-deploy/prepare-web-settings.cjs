@@ -44,7 +44,7 @@ async function waitForReplacement(before, io, timeoutMs = 600000) {
     try { identity = await io.identity(Math.min(30000, deadline - io.now())); } catch { identity = null; }
     if (identity && identity !== before) {
       if (identity !== observed) { observed = identity; stableSince = io.now(); }
-      if (io.now() - stableSince >= 10000) return;
+      if (io.now() - stableSince >= 10000) return identity;
     } else { observed = null; stableSince = 0; }
     await io.sleep(Math.min(5000, Math.max(0, deadline - io.now())));
   }
@@ -66,9 +66,17 @@ async function prepareTarget(plan, io, linux) {
     if (!before) throw new Error('SCM is unavailable before settings preparation; package upload is blocked');
   }
   if (!delta.set.length && !delta.remove.length) { io.ready(); return 'unchanged'; }
-  if (delta.set.length) await io.set(delta.set);
-  if (delta.remove.length) await io.remove(delta.remove);
-  if (linux) await waitForReplacement(before, io);
+  if (delta.set.length) {
+    await io.set(delta.set);
+    if (linux) before = await waitForReplacement(before, io);
+  }
+  // Removing run-from-package is a separate ARM mutation. Observe its own
+  // recycle, rather than accepting an earlier set operation's replacement
+  // while this second recycle is still queued.
+  if (delta.remove.length) {
+    await io.remove(delta.remove);
+    if (linux) await waitForReplacement(before, io);
+  }
   const remaining = changes(await io.read(Object.keys(plan.settings).concat(plan.remove)), plan);
   if (remaining.set.length || remaining.remove.length) throw new Error('App Service settings did not match after preparation');
   io.ready();
