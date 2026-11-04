@@ -30,6 +30,8 @@ clean_node_runtime() {
   echo 'APP_SERVICE_NODE_CLEANUP_COMPLETE'
 }
 
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+# Kudu pipes the decoded script into Bash, where BASH_SOURCE has no element.
+# A sourced file still has its own source path and must only define the function.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   clean_node_runtime /home/site/wwwroot
 fi
