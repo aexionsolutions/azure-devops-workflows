@@ -52,6 +52,10 @@ test('SCM identity refers to the same executor across separate commands', { skip
   const second = execute(identityScript);
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
+  // This Node process stands in for the long-lived Kudu executor, not one of
+  // the new Bash/pipeline processes spawned for each request.
+  const hostFields = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8').replace(/^.*\) /, '').trim().split(/\s+/);
+  assert.equal(first.stdout.trim(), `SCM_PROCESS:${process.pid}:${hostFields[19]}`);
   assert.equal(result({ ExitCode: 0, Output: first.stdout, Error: first.stderr }, 'identity'),
     result({ ExitCode: 0, Output: second.stdout, Error: second.stderr }, 'identity'));
 });
