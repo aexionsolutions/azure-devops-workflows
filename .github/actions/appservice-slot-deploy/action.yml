@@ -54,7 +54,9 @@ runs:
       if: inputs.use-slot == 'true'
       shell: bash
       run: |
-        az webapp deployment slot create -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --slot staging 2>/dev/null || true
+        if [ ! -f "$RUNNER_TEMP/deploy_fail.txt" ] && [ ! -f "$RUNNER_TEMP/appservice-${{ inputs.app-name }}-staging-settings-ready" ]; then
+          az webapp deployment slot create -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --slot staging 2>/dev/null || true
+        fi
 
     - name: Ensure staging slot is started
       if: inputs.use-slot == 'true'
@@ -63,7 +65,10 @@ runs:
         RG: ${{ inputs.resource-group }}
         APP: ${{ inputs.app-name }}
         SLOT: staging
-      run: bash "${{ github.action_path }}/ensure-running.sh"
+      run: |
+        if [ ! -f "$RUNNER_TEMP/deploy_fail.txt" ] && [ ! -f "$RUNNER_TEMP/appservice-${APP}-staging-settings-ready" ]; then
+          bash "${{ github.action_path }}/ensure-running.sh"
+        fi
 
     - name: Deploy package (staging slot)
       if: inputs.use-slot == 'true' && inputs.skip-deploy != 'true'
@@ -94,7 +99,10 @@ runs:
       env:
         RG: ${{ inputs.resource-group }}
         APP: ${{ inputs.app-name }}
-      run: bash "${{ github.action_path }}/ensure-running.sh"
+      run: |
+        if [ ! -f "$RUNNER_TEMP/deploy_fail.txt" ] && [ ! -f "$RUNNER_TEMP/appservice-${APP}-production-settings-ready" ]; then
+          bash "${{ github.action_path }}/ensure-running.sh"
+        fi
 
     - name: Warm up staging
       if: inputs.use-slot == 'true' && inputs.warmup-url-staging != ''
