@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Web deployment preparation and Kudu cleanup:** avoid unchanged settings
+  writes; batch actual changes and wait for a replacement SCM executor before
+  package upload. The existing fixed delay could expire while a recycle was
+  still pending. Explicitly execute cleanup through Bash and require its
+  completion marker; a zero-exit echo of the encoded script is not success.
+  Preparation failures block upload and retain diagnostics. Retrieve Kudu logs
+  using the observed deployment ID. See `docs/kudu-settings-recycle.md` for
+  evidence, limits and the correction to the earlier archive diagnosis.
+
 ### Added
 
 - **`dotnet-test-retry`: opt-in skips are not retried, and are reported.** A test

@@ -29,8 +29,11 @@ The promoted ZIP contains 3,507 entries, no `.next/cache` contents, no Oryx
 manifest/archive and no prerendered admin paths. Yet the captured startup script
 found `node_modules.tar.zst`, extracted it into `/node_modules`, moved aside the
 deployed modules directory and linked the expanded modules into the app root.
-The source archive was therefore retained on the host, rather than shipped in
-this artifact. It can replace newer packaged dependencies during startup.
+The archive was on the host rather than shipped in this artifact. The follow-up
+run shows Kudu's Node optimizer also creates such archives during deployment, so
+its presence alone does not prove it was old. See
+[the follow-up investigation](kudu-settings-recycle.md) for this correction and
+the confirmed cleanup-command defect in the initial repair.
 
 [Kudu documents](https://github.com/projectkudu/kudu/wiki/Deploying-from-a-zip-file-or-url)
 that Linux ZipDeploy restarts the container, that files created outside its
