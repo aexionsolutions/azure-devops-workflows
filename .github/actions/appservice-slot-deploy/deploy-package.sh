@@ -10,6 +10,11 @@ SCM_SETTLE_SECONDS="${SCM_SETTLE_SECONDS:-45}"
 CLEAN_NODE_RUNTIME="${CLEAN_NODE_RUNTIME:-false}"
 action_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
+if [ -f "$RUNNER_TEMP/deploy_fail.txt" ]; then
+  echo 'Skipping upload because deployment preparation failed.'
+  exit 0
+fi
+
 if [ -z "$RG" ] || [ -z "$APP" ] || [ -z "$PACKAGE" ]; then
   echo "Missing RG/APP/PACKAGE environment variables" >&2
   echo "deploy missing-inputs" > "$RUNNER_TEMP/deploy_fail.txt"
@@ -111,6 +116,10 @@ if [ "$deploy_mode" = "zipdeploy" ]; then
   else
     (
       set -e
+      settings_marker="$RUNNER_TEMP/appservice-${APP}-${SLOT:-production}-settings-ready"
+      if [ -f "$settings_marker" ]; then
+        echo 'Web settings and SCM replacement were prepared before deployment; no further settings writes.'
+      else
       echo "Linux App Service detected; clearing run-from-package so Kudu extracts the zip into wwwroot."
       az webapp config appsettings delete -g "$RG" -n "$APP" "${slot_args[@]}" --setting-names WEBSITE_RUN_FROM_PACKAGE --output none || true
       # A runtime-generated file can have the same timestamp as an artifact.
@@ -122,16 +131,16 @@ if [ "$deploy_mode" = "zipdeploy" ]; then
         echo "Waiting ${SCM_SETTLE_SECONDS}s for App Service/SCM configuration changes to settle before zipdeploy."
         sleep "$SCM_SETTLE_SECONDS"
       fi
+      fi
       if [ "$CLEAN_NODE_RUNTIME" = true ]; then
         # The command's working directory and the script's direct entry point
         # both fix the remote scope to /home/site/wwwroot. No uploads or compiled
         # pages are deleted. Zipdeploy will perform the one required restart.
-        cleanup_code=$(base64 < "$action_dir/clean-node-runtime.sh" | tr -d '\r\n')
-        printf '{"command":"printf %%s %s | base64 -d | bash","dir":"/home/site/wwwroot"}' "$cleanup_code" > "_logs/${target}-cleanup-request.json"
+        node "$action_dir/kudu-command.cjs" request "$action_dir/clean-node-runtime.sh" > "_logs/${target}-cleanup-request.json"
         curl -fsS --connect-timeout 15 --max-time 120 -u "$user:$pass" \
           -H 'Content-Type: application/json' --data-binary @"_logs/${target}-cleanup-request.json" \
           "$kudu_base/api/command" -o "_logs/${target}-cleanup-result.json"
-        if ! grep -Eq '"ExitCode"[[:space:]]*:[[:space:]]*0([,}[:space:]])' "_logs/${target}-cleanup-result.json"; then
+        if ! node "$action_dir/kudu-command.cjs" result "_logs/${target}-cleanup-result.json" cleanup; then
           echo 'Generated runtime cleanup failed; not uploading the package.' >&2
           exit 1
         fi
@@ -209,7 +218,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     fi
 
     if [ "$status_value" = "4" ] || [ "$provisioning_state" = "Succeeded" ]; then
-      curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/latest/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
+      curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/$deployment_id/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
       # Linux zipdeploy already restarts the container. Restarting it again
       # here cancels an in-progress cold start (observed on rx-dev-web).
       echo "Package deployment completed for $APP ($target)."
@@ -217,7 +226,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     fi
 
     if [ "$status_value" = "3" ] || [ "$provisioning_state" = "Failed" ]; then
-      curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/latest/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
+      curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/$deployment_id/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
       echo "Package deployment failed according to Kudu for $APP ($target)." >&2
       echo "deploy kudu-failed $target" > "$RUNNER_TEMP/deploy_fail.txt"
       exit 0
@@ -229,7 +238,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   sleep "$poll_interval_seconds"
 done
 
-curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/latest/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
+curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/${deployment_id:-latest}/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
 echo "Package deployment did not complete within ${DEPLOY_TIMEOUT_MINUTES} minutes for $APP ($target)." >&2
 echo "deploy completion-timeout $target" > "$RUNNER_TEMP/deploy_fail.txt"
 exit 0
