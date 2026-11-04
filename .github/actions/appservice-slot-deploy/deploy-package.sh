@@ -7,6 +7,8 @@ SLOT="${SLOT:-}"
 PACKAGE="${PACKAGE:-}"
 DEPLOY_TIMEOUT_MINUTES="${DEPLOY_TIMEOUT_MINUTES:-10}"
 SCM_SETTLE_SECONDS="${SCM_SETTLE_SECONDS:-45}"
+CLEAN_NODE_RUNTIME="${CLEAN_NODE_RUNTIME:-false}"
+action_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 if [ -z "$RG" ] || [ -z "$APP" ] || [ -z "$PACKAGE" ]; then
   echo "Missing RG/APP/PACKAGE environment variables" >&2
@@ -28,6 +30,19 @@ if [ ! -f "$PACKAGE" ]; then
   echo "Package not found: $PACKAGE" >&2
   echo "deploy package-not-found" > "$RUNNER_TEMP/deploy_fail.txt"
   exit 0
+fi
+
+if [ "$CLEAN_NODE_RUNTIME" = true ]; then
+  # Never clear runtime artifacts for a source-only, incomplete or non-Next zip.
+  mkdir -p _logs
+  if ! unzip -Z1 "$PACKAGE" > _logs/package-files.txt ||
+     ! grep -Fxq '.next/BUILD_ID' _logs/package-files.txt ||
+     ! grep -q '^node_modules/' _logs/package-files.txt ||
+     ! grep -Eq '^(next-server|server)\.js$' _logs/package-files.txt; then
+    echo 'Runtime cleanup requires a complete prebuilt Next standalone package.' >&2
+    echo 'deploy invalid-next-package' > "$RUNNER_TEMP/deploy_fail.txt"
+    exit 0
+  fi
 fi
 
 target="production"
@@ -52,6 +67,11 @@ linux_fx_version=$(az webapp config show -g "$RG" -n "$APP" "${slot_args[@]}" --
 deploy_mode="onedeploy"
 if [ -n "$linux_fx_version" ]; then
   deploy_mode="zipdeploy"
+fi
+if [ "$CLEAN_NODE_RUNTIME" = true ] && [[ "$linux_fx_version" != NODE\|* ]]; then
+  echo 'Runtime cleanup is only supported for a confirmed Linux Node app.' >&2
+  echo 'deploy invalid-cleanup-runtime' > "$RUNNER_TEMP/deploy_fail.txt"
+  exit 0
 fi
 
 if [ -n "$user" ] && [ -n "$pass" ]; then
@@ -89,19 +109,38 @@ if [ "$deploy_mode" = "zipdeploy" ]; then
     echo "Linux zipdeploy requires publishing credentials, but none were returned." >"$start_log_file"
     status=1
   else
-    {
+    (
+      set -e
       echo "Linux App Service detected; clearing run-from-package so Kudu extracts the zip into wwwroot."
       az webapp config appsettings delete -g "$RG" -n "$APP" "${slot_args[@]}" --setting-names WEBSITE_RUN_FROM_PACKAGE --output none || true
-      az webapp config appsettings set -g "$RG" -n "$APP" "${slot_args[@]}" --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false --output none
+      # A runtime-generated file can have the same timestamp as an artifact.
+      # Force package files to replace those copies; this does not delete
+      # application-created files outside the deployment manifest.
+      az webapp config appsettings set -g "$RG" -n "$APP" "${slot_args[@]}" --settings \
+        SCM_DO_BUILD_DURING_DEPLOYMENT=false SCM_ZIPDEPLOY_DONOT_PRESERVE_FILETIME=1 --output none
       if [ "$SCM_SETTLE_SECONDS" -gt 0 ]; then
         echo "Waiting ${SCM_SETTLE_SECONDS}s for App Service/SCM configuration changes to settle before zipdeploy."
         sleep "$SCM_SETTLE_SECONDS"
+      fi
+      if [ "$CLEAN_NODE_RUNTIME" = true ]; then
+        # The command's working directory and the script's direct entry point
+        # both fix the remote scope to /home/site/wwwroot. No uploads or compiled
+        # pages are deleted. Zipdeploy will perform the one required restart.
+        cleanup_code=$(base64 < "$action_dir/clean-node-runtime.sh" | tr -d '\r\n')
+        printf '{"command":"printf %%s %s | base64 -d | bash","dir":"/home/site/wwwroot"}' "$cleanup_code" > "_logs/${target}-cleanup-request.json"
+        curl -fsS --connect-timeout 15 --max-time 120 -u "$user:$pass" \
+          -H 'Content-Type: application/json' --data-binary @"_logs/${target}-cleanup-request.json" \
+          "$kudu_base/api/command" -o "_logs/${target}-cleanup-result.json"
+        if ! grep -Eq '"ExitCode"[[:space:]]*:[[:space:]]*0([,}[:space:]])' "_logs/${target}-cleanup-result.json"; then
+          echo 'Generated runtime cleanup failed; not uploading the package.' >&2
+          exit 1
+        fi
       fi
       echo "Posting package to Kudu zipdeploy endpoint for extraction."
       curl -fsS --connect-timeout 30 --max-time "$timeout_seconds" -u "$user:$pass" -X POST "$kudu_base/api/zipdeploy?isAsync=true" \
         --data-binary @"$PACKAGE" \
         -D "_logs/${target}-zipdeploy-headers.txt"
-    } >"$start_log_file" 2>&1
+    ) >"$start_log_file" 2>&1
     status=$?
   fi
 else
@@ -171,10 +210,8 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 
     if [ "$status_value" = "4" ] || [ "$provisioning_state" = "Succeeded" ]; then
       curl -fsS -u "$user:$pass" "$kudu_base/api/deployments/latest/log" -o "$kudu_log_file" 2>"_logs/${target}-kudu-latest-log.err" || true
-      if [ "$deploy_mode" = "zipdeploy" ]; then
-        echo "Restarting Linux App Service after extracted zipdeploy so the container reads wwwroot."
-        az webapp restart -g "$RG" -n "$APP" "${slot_args[@]}" --output none || true
-      fi
+      # Linux zipdeploy already restarts the container. Restarting it again
+      # here cancels an in-progress cold start (observed on rx-dev-web).
       echo "Package deployment completed for $APP ($target)."
       exit 0
     fi

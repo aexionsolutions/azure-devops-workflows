@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **App Service cold deployments:** Linux ZipDeploy already restarts the app;
+  the action no longer cancels that startup with a second restart. HTTP warm-up
+  now has a configurable wall-clock budget (20 minutes by default), reads status
+  and body from one completed request, and saves the last failed response.
+  Failed staging health blocks a swap; final production warm-up only runs after
+  an actual swap. Linux package files overwrite timestamp-matched deployed
+  copies. Prebuilt Next consumers can opt into bounded generated Next cache and
+  legacy Oryx archive cleanup; uploads, real module directories and compiled
+  pages are preserved. Cleanup failures prevent upload and retain diagnostics.
 - **`dotnet-test-retry`: "no failures" is no longer told from "no TRX" by
   `$null`.** PowerShell returns an empty failure list as `$null`, so the two
   were indistinguishable and the script's "non-zero exit but no recorded

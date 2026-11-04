@@ -39,6 +39,14 @@ inputs:
     description: Maximum minutes to wait for package upload plus Azure OneDeploy completion before failing with diagnostics
     required: false
     default: '40'
+  warmup-timeout-minutes:
+    description: Maximum minutes per HTTP readiness phase (1-60); never restarts a warming app
+    required: false
+    default: '20'
+  clean-node-runtime:
+    description: Opt in to removing generated Next cache and old Oryx archives before a prebuilt Next package is extracted
+    required: false
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -66,6 +74,7 @@ runs:
         SLOT: staging
         PACKAGE: ${{ inputs.package }}
         DEPLOY_TIMEOUT_MINUTES: ${{ inputs.deploy-timeout-minutes }}
+        CLEAN_NODE_RUNTIME: ${{ inputs.clean-node-runtime }}
       run: bash "${{ github.action_path }}/deploy-package.sh"
 
     - name: Deploy package (production - no slots)
@@ -76,6 +85,7 @@ runs:
         APP: ${{ inputs.app-name }}
         PACKAGE: ${{ inputs.package }}
         DEPLOY_TIMEOUT_MINUTES: ${{ inputs.deploy-timeout-minutes }}
+        CLEAN_NODE_RUNTIME: ${{ inputs.clean-node-runtime }}
       run: bash "${{ github.action_path }}/deploy-package.sh"
 
     - name: Ensure production app is started (no slots)
@@ -89,108 +99,37 @@ runs:
     - name: Warm up staging
       if: inputs.use-slot == 'true' && inputs.warmup-url-staging != ''
       shell: bash
-      run: |
-        set -euo pipefail
-        if [ -f "$RUNNER_TEMP/deploy_fail.txt" ]; then
-          echo "Skipping staging warm-up because package deployment did not complete."
-          exit 0
-        fi
-        url='${{ inputs.warmup-url-staging }}'
-        echo "Warming up staging at $url ..."
-        # Increased retries (20) and timeout (15s) to account for:
-        # - Database connection establishment
-        # - EF Core migrations on first startup
-        # - Application initialization (DI container, middlewares)
-        for i in {1..20}; do
-          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$url" || echo "000")
-          if [ "$code" = "200" ]; then
-            # Guard against iisnode dev error page returning HTTP 200
-            body=$(curl -sS --connect-timeout 5 --max-time 15 "$url" | head -n 50 || true)
-            if echo "$body" | grep -qi "iisnode encountered an error"; then
-              echo "Received iisnode error page (HTTP 200) – continuing retries..."
-            else
-              echo "Staging warm (HTTP 200)"; exit 0
-            fi
-          fi
-          echo "Retry $i/20 (HTTP $code)..."; sleep 5
-        done
-        echo "Staging warm-up failed: expected HTTP 200 from $url" >&2
-        echo "staging $url" > "$RUNNER_TEMP/warmup_fail.txt"
-        # Do not exit here; allow log collection step to run and then fail
-        exit 0
-
+      env:
+        WARMUP_LABEL: staging
+        WARMUP_URL: ${{ inputs.warmup-url-staging }}
+        WARMUP_TIMEOUT_MINUTES: ${{ inputs.warmup-timeout-minutes }}
+      run: bash "${{ github.action_path }}/wait-for-health.sh"
     - name: Warm up production (no slots)
       if: inputs.use-slot != 'true' && inputs.warmup-url-prod != ''
       shell: bash
-      run: |
-        set -euo pipefail
-        if [ -f "$RUNNER_TEMP/deploy_fail.txt" ]; then
-          echo "Skipping production warm-up because package deployment did not complete."
-          exit 0
-        fi
-        url='${{ inputs.warmup-url-prod }}'
-        echo "Warming up production at $url ..."
-        # Increased retries (20) and timeout (15s) to account for:
-        # - Database connection establishment
-        # - EF Core migrations on first startup
-        # - Application initialization (DI container, middlewares)
-        for i in {1..20}; do
-          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$url" || echo "000")
-          if [ "$code" = "200" ]; then
-            body=$(curl -sS --connect-timeout 5 --max-time 15 "$url" | head -n 50 || true)
-            if echo "$body" | grep -qi "iisnode encountered an error"; then
-              echo "Received iisnode error page (HTTP 200) – continuing retries..."
-            else
-              echo "Prod warm (HTTP 200)"; exit 0
-            fi
-          fi
-          echo "Retry $i/20 (HTTP $code)..."; sleep 5
-        done
-        echo "Production warm-up failed: expected HTTP 200 from $url" >&2
-        echo "prod $url" > "$RUNNER_TEMP/warmup_fail.txt"
-        exit 0
-
+      env:
+        WARMUP_LABEL: production
+        WARMUP_URL: ${{ inputs.warmup-url-prod }}
+        WARMUP_TIMEOUT_MINUTES: ${{ inputs.warmup-timeout-minutes }}
+      run: bash "${{ github.action_path }}/wait-for-health.sh"
     - name: Swap slots (staging -> production)
       if: inputs.use-slot == 'true' && inputs.skip-swap != 'true'
       shell: bash
       run: |
-        if [ -f "$RUNNER_TEMP/deploy_fail.txt" ]; then
-          echo "Skipping slot swap because package deployment did not complete."
+        if [ -f "$RUNNER_TEMP/deploy_fail.txt" ] || [ -f "$RUNNER_TEMP/warmup_fail.txt" ]; then
+          echo "Skipping slot swap because deployment or staging readiness failed."
           exit 0
         fi
         az webapp deployment slot swap -g "${{ inputs.resource-group }}" -n "${{ inputs.app-name }}" --slot staging --target-slot production
 
     - name: Final warm up production
-      if: inputs.warmup-url-prod != ''
+      if: inputs.use-slot == 'true' && inputs.skip-swap != 'true' && inputs.warmup-url-prod != ''
       shell: bash
-      run: |
-        set -euo pipefail
-        if [ -f "$RUNNER_TEMP/deploy_fail.txt" ]; then
-          echo "Skipping final warm-up because package deployment did not complete."
-          exit 0
-        fi
-        url='${{ inputs.warmup-url-prod }}'
-        echo "Final warm up at $url ..."
-        # Increased retries (20) and timeout (15s) to account for:
-        # - Database connection establishment
-        # - EF Core migrations on first startup  
-        # - Application initialization (DI container, middlewares)
-        for i in {1..20}; do
-          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$url" || echo "000")
-          if [ "$code" = "200" ]; then
-            body=$(curl -sS --connect-timeout 5 --max-time 15 "$url" | head -n 50 || true)
-            if echo "$body" | grep -qi "iisnode encountered an error"; then
-              echo "Received iisnode error page (HTTP 200) – continuing retries..."
-            else
-              echo "Prod warm (HTTP 200)"; exit 0
-            fi
-          fi
-          echo "Retry $i/20 (HTTP $code)..."; sleep 5
-        done
-        echo "Final warm-up failed: expected HTTP 200 from $url" >&2
-        echo "final $url" > "$RUNNER_TEMP/warmup_fail.txt"
-        exit 0
-
+      env:
+        WARMUP_LABEL: final
+        WARMUP_URL: ${{ inputs.warmup-url-prod }}
+        WARMUP_TIMEOUT_MINUTES: ${{ inputs.warmup-timeout-minutes }}
+      run: bash "${{ github.action_path }}/wait-for-health.sh"
     - name: Collect App Service diagnostics (on deploy/warm-up failure)
       if: always()
       shell: bash

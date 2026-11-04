@@ -424,6 +424,8 @@ Use this workflow during release promotion after `web.zip` has already been buil
 | `artifact-name` or `package` | ✅ | Artifact name to download or local ZIP path | `web` / `web.zip` |
 | `warmup-url-staging` | ❌ | Staging health URL used before verification | `https://tems-uat-web-staging.azurewebsites.net/healthz` |
 | `warmup-url-prod` | ❌ | Production health URL used after swap/direct deploy | `https://tems-uat-web.azurewebsites.net/healthz` |
+| `warmup-timeout-minutes` | ❌ | Per-phase HTTP readiness budget, 1–60 minutes; default 20. No warm-up restarts. | `20` |
+| `clean-node-runtime` | ❌ | Opt-in generated Next cache/Oryx cleanup for a complete Linux Next standalone package; default false. | `true` |
 | `expect-version` | ❌ | Version string to set and verify after warm-up | `1.2.3` |
 | `version-url` | ❌ | Explicit version endpoint. If omitted and warm-up ends in `/healthz`, `/_meta` is tried. | `https://tems-uat-web.azurewebsites.net/_meta` |
 | `b2c_authority` | ❌ | B2C authority used for web runtime auth settings | `https://tenant.b2clogin.com/...` |
@@ -435,6 +437,22 @@ Use this workflow during release promotion after `web.zip` has already been buil
 When any B2C web auth setting is supplied, `b2c_authority`, `b2c_scope`, and either `secrets.b2c_web_client_id` or `b2c_client_id` must all be present. The deployment writes both server-side and `NEXT_PUBLIC_` auth settings for production, and for staging when slots are used.
 
 App Service package deployment is bounded by the composite action's 40-minute default timeout. If upload, Kudu/OneDeploy completion, warm-up, or verification fails, the workflow uploads `appservice-logs-<app-name>` with App Service state, deploy settings, Kudu deployment metadata/logs, and App Service log downloads where available.
+
+Linux ZipDeploy supplies the container restart; the action does not restart a
+warming container again. Package files always overwrite timestamp-matched
+copies. This does not by itself remove runtime-created files. For a prebuilt
+Next standalone package, `clean-node-runtime: true` removes only `.next/cache`,
+legacy `oryx-manifest.toml` / `node_modules.tar.*` files, and an old `node_modules`
+symlink, within the fixed `/home/site/wwwroot` root. Compiled pages, uploads and
+real module directories remain. Incomplete packages, non-Node runtimes, unsafe
+cache paths or cleanup failures stop deployment. Kudu command execution uses the
+same deployment credentials as ZipDeploy. Cleanup is not enabled for existing
+consumers unless they opt in.
+
+See [the cold-deployment investigation](docs/appservice-cold-deployment.md) for
+evidence, limits and tests. Retained runtime files are a supported explanation
+for stale artifacts; the earlier stale-page incident's precise origin is not
+claimed proven.
 
 ### api-deploy.yml
 
