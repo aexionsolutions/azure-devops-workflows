@@ -27,6 +27,7 @@ clean_node_runtime() {
   if [ -L node_modules ]; then rm -- node_modules; fi
   if [ -d .next/cache ]; then rm -rf -- .next/cache; fi
   echo 'Removed generated Next cache and legacy Oryx runtime artifacts.'
+  echo 'APP_SERVICE_NODE_CLEANUP_COMPLETE'
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

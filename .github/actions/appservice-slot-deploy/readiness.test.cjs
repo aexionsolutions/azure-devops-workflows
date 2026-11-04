@@ -22,9 +22,12 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "$MODE" = deploy ] || [ "$MODE" = windows ]; then
   case "$url" in
-    */api/command) body='{"ExitCode":0,"Output":""}'; [ "$CLEANUP_FAIL" != true ] || body='{"ExitCode":1,"Error":"fixture refusal"}' ;;
+    */api/command)
+      body='{"ExitCode":0,"Output":"APP_SERVICE_NODE_CLEANUP_COMPLETE","Error":""}'
+      [ "$CLEANUP_FAIL" != true ] || body='{"ExitCode":1,"Error":"fixture refusal"}'
+      [ "$CLEANUP_ECHO" != true ] || body='{"ExitCode":0,"Output":"encoded-script|base64-d|bash","Error":""}' ;;
     */api/zipdeploy*) touch "$POSTED"; [ -z "$headers" ] || echo 'HTTP/1.1 202 Accepted' > "$headers"; exit 0 ;;
-    */api/deployments/latest/log) body='[]' ;;
+    */api/deployments/*/log) body='[]' ;;
     */api/deployments/latest)
       id=old; [ ! -f "$POSTED" ] || id=new
       body="{\\"id\\":\\"$id\\",\\"status\\":4,\\"complete\\":true}" ;;
@@ -77,6 +80,7 @@ node -e 'const fs=require("node:fs"); const field=process.argv[1].match(/\\.(\\w
     fs.writeFileSync(path.join(root, 'calls'), '');
     fs.writeFileSync(path.join(root, 'package.zip'), 'synthetic package');
     fs.copyFileSync(path.join(__dirname, 'clean-node-runtime.sh'), path.join(root, 'clean-node-runtime.sh'));
+    fs.copyFileSync(path.join(__dirname, 'kudu-command.cjs'), path.join(root, 'kudu-command.cjs'));
     setup(root);
     fs.writeFileSync(path.join(root, 'run.sh'), `export PATH="${unix(root)}/bin:$PATH"\n${script}`);
     const result = spawnSync(bash, [unix(path.join(root, 'run.sh'))], {
@@ -161,6 +165,7 @@ test('Linux zipdeploy refreshes artifact files and leaves its automatic restart 
   assert.equal(result.deployFailed, false);
   assert.match(result.stdout, /Package deployment completed/);
   assert.match(result.calls, /SCM_ZIPDEPLOY_DONOT_PRESERVE_FILETIME=1/);
+  assert.match(result.calls, /\/api\/deployments\/new\/log/);
   assert.doesNotMatch(result.calls, /az webapp restart/);
 });
 
@@ -189,6 +194,27 @@ test('a cleanup refusal stops upload and retains the deployment failure marker',
   assert.equal(result.deployFailed, true);
   assert.match(result.calls, /\/api\/command/);
   assert.doesNotMatch(result.calls, /\/api\/zipdeploy/);
+});
+
+test('a zero-exit echo without the cleanup completion marker stops upload', () => {
+  const result = run(deploy, { MODE: 'deploy', CLEAN_NODE_RUNTIME: 'true', CLEANUP_ECHO: 'true' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.deployFailed, true);
+  assert.doesNotMatch(result.calls, /\/api\/zipdeploy/);
+});
+
+test('prepared web settings are not rewritten after the SCM replacement gate', () => {
+  const result = run(deploy, { MODE: 'deploy' }, root =>
+    fs.writeFileSync(path.join(root, 'appservice-fixture-app-production-settings-ready'), 'ready'));
+  assert.equal(result.deployFailed, false);
+  assert.match(result.calls, /\/api\/zipdeploy/);
+  assert.doesNotMatch(result.calls, /az webapp config appsettings (set|delete)/);
+});
+
+test('failed settings preparation prevents any upload or management operation', () => {
+  const result = run(deploy, { MODE: 'deploy' }, root => fs.writeFileSync(path.join(root, 'deploy_fail.txt'), 'preparation failed'));
+  assert.equal(result.deployFailed, true);
+  assert.equal(result.calls, '');
 });
 
 test('incomplete packages cannot trigger remote cleanup or upload', () => {
@@ -225,4 +251,17 @@ test('phase wiring uses the helper and only warms production again after an actu
   for (const label of ['staging', 'production', 'final']) assert.match(action, new RegExp(`WARMUP_LABEL: ${label}`));
   assert.match(action.split('    - name: Final warm up production')[1],
     /if: inputs.use-slot == 'true' && inputs.skip-swap != 'true' && inputs.warmup-url-prod != ''/);
+});
+
+for (const [name, target] of [
+  ['Ensure staging slot exists (if supported)', 'staging'],
+  ['Ensure staging slot is started', 'staging'],
+  ['Ensure production app is started (no slots)', 'production'],
+]) test(`${name} leaves prepared targets alone`, () => {
+  const block = action.split(`    - name: ${name}`)[1].split('    - name: ')[0];
+  const script = block.split('      run: |')[1].split(/\r?\n/)
+    .map(line => line.replace(/^        /, '')).join('\n').replace(/\$\{\{[^}]+\}\}/g, 'fixture-app');
+  const result = run(script, {}, root => fs.writeFileSync(path.join(root, `appservice-fixture-app-${target}-settings-ready`), 'ready'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.calls, '');
 });

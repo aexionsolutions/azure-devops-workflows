@@ -48,7 +48,10 @@ if [ -n "$user" ] && [ -n "$pass" ]; then
 
   prod_base="https://${APP}.scm.azurewebsites.net"
   curl -fsS -u "$user:$pass" "$prod_base/api/deployments/latest" -o _logs/prod-kudu-latest.json 2>_logs/prod-kudu-latest.err || true
-  curl -fsS -u "$user:$pass" "$prod_base/api/deployments/latest/log" -o _logs/prod-kudu-latest-log.json 2>_logs/prod-kudu-latest-log.err || true
+  prod_id=$(jq -r '.id // empty' _logs/prod-kudu-latest.json 2>/dev/null || true)
+  if [[ "$prod_id" =~ ^[A-Za-z0-9-]+$ ]]; then
+    curl -fsS -u "$user:$pass" "$prod_base/api/deployments/$prod_id/log" -o _logs/prod-kudu-latest-log.json 2>_logs/prod-kudu-latest-log.err || true
+  fi
 
   if [ "$USE_SLOT" = "true" ]; then
     staging_user=$(az webapp deployment list-publishing-credentials -g "$RG" -n "$APP" --slot staging --query publishingUserName -o tsv 2>/dev/null || true)
@@ -63,7 +66,10 @@ if [ -n "$user" ] && [ -n "$pass" ]; then
 
     staging_base="https://${APP}-staging.scm.azurewebsites.net"
     curl -fsS -u "$staging_user:$staging_pass" "$staging_base/api/deployments/latest" -o _logs/staging-kudu-latest.json 2>_logs/staging-kudu-latest.err || true
-    curl -fsS -u "$staging_user:$staging_pass" "$staging_base/api/deployments/latest/log" -o _logs/staging-kudu-latest-log.json 2>_logs/staging-kudu-latest-log.err || true
+    staging_id=$(jq -r '.id // empty' _logs/staging-kudu-latest.json 2>/dev/null || true)
+    if [[ "$staging_id" =~ ^[A-Za-z0-9-]+$ ]]; then
+      curl -fsS -u "$staging_user:$staging_pass" "$staging_base/api/deployments/$staging_id/log" -o _logs/staging-kudu-latest-log.json 2>_logs/staging-kudu-latest-log.err || true
+    fi
   fi
 else
   echo "Publishing credentials unavailable; skipping Kudu diagnostic endpoints." > _logs/kudu-credentials-unavailable.txt

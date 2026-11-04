@@ -447,7 +447,15 @@ symlink, within the fixed `/home/site/wwwroot` root. Compiled pages, uploads and
 real module directories remain. Incomplete packages, non-Node runtimes, unsafe
 cache paths or cleanup failures stop deployment. Kudu command execution uses the
 same deployment credentials as ZipDeploy. Cleanup is not enabled for existing
-consumers unless they opt in.
+consumers unless they opt in. Cleanup must return its explicit completion marker;
+an exit code of zero alone is insufficient.
+
+The web workflow now batches actual settings differences and avoids unchanged
+writes. For Linux targets, changed settings must be followed by an observed,
+stable replacement SCM executor before upload; the gate has a ten-minute limit.
+Starting a stopped target happens before that gate. No settings/start operations
+are issued by the composite afterwards. See [the SCM follow-up](docs/kudu-settings-recycle.md)
+for the command protocol, regression tests and remaining live acceptance limits.
 
 See [the cold-deployment investigation](docs/appservice-cold-deployment.md) for
 evidence, limits and tests. Retained runtime files are a supported explanation
