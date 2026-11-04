@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Kudu cleanup through stdin:** the generated-runtime cleanup now handles
+  Bash's unset `BASH_SOURCE[0]` when the decoded script is piped into Bash.
+  Previously strict mode stopped cleanup before upload. A regression executes
+  the complete cleanup script through the actual command transport, checks
+  generated-file removal and application-file preservation, and retains root
+  refusal. See `docs/kudu-settings-recycle.md` for the observed failure.
+
 - **Web deployment preparation and Kudu cleanup:** avoid unchanged settings
   writes; batch actual changes and wait for a replacement SCM executor before
   package upload. The existing fixed delay could expire while a recycle was

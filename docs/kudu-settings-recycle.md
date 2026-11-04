@@ -61,3 +61,26 @@ tests. Deployment logs use the actual observed deployment ID; `/latest/log`
 returned 404 on the failed run. No live mutation, restart, cleanup or promotion
 was performed while developing this repair. First live deployment remains
 necessary to establish the platform-side acceptance result.
+
+## Follow-up: stdin entry point
+
+Run [41893343103](https://github.com/aexionsolutions/ravenxpress/actions/runs/41893343103)
+used stable v6.2.3 on 4 November 2026. Settings preparation reported unchanged
+at 19:31:41 UTC. At 19:31:49, cleanup returned exit code 1 and
+`bash: line 33: BASH_SOURCE[0]: unbound variable`. Its output was empty. Upload
+was correctly blocked; the deployment metadata in the diagnostic artifact
+refers to the preceding failed deployment, not a new upload or SCM restart.
+
+The direct-exec transport ran the script, but Bash does not populate
+`BASH_SOURCE[0]` for a script read from stdin. The cleanup's strict-mode
+entry-point check therefore crashed. Default that missing element to `$0`, so
+stdin execution calls cleanup while sourcing a file still only defines the
+function. All path/symlink guards and completion validation remain active.
+
+The regression uses the complete production cleanup script through the Kudu
+request and direct-exec starter. Only the fixed application-root argument is
+substituted with an isolated temporary fixture; the root guards stay enabled.
+It fails on v6.2.3 with the exact observed error, then passes with this repair,
+checking actual removal, preserved application files, and wrong-root refusal.
+Existing sourced-script and symlink tests remain required. This is source
+validation, not proof of successful live deployment or manual UI acceptance.

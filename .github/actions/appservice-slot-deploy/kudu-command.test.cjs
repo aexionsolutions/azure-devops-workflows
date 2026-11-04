@@ -8,7 +8,7 @@ const { request, result, identityScript } = require('./kudu-command.cjs');
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const unix = value => value.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase());
 
-function execute(script) {
+function execute(script, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kudu-command-contract-'));
   try {
     const starter = path.join(root, 'starter.sh');
@@ -17,7 +17,9 @@ function execute(script) {
     const command = request(script).command;
     const match = command.match(/^bash -c "([^"\\]*)"$/);
     assert.ok(match, 'The shell must be explicitly requested as one -c argument');
-    return spawnSync(bash, [unix(starter), 'bash', '-c', match[1]], { encoding: 'utf8', windowsHide: true });
+    return spawnSync(bash, [unix(starter), 'bash', '-c', match[1]], {
+      cwd: options.cwd, encoding: 'utf8', windowsHide: true, timeout: 15000,
+    });
   } finally {
     assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep));
     assert.ok(path.basename(root).startsWith('kudu-command-contract-'));
@@ -30,6 +32,39 @@ test('Kudu direct-exec actually runs the decoded script, including its pipeline'
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), 'APP_SERVICE_NODE_CLEANUP_COMPLETE');
   assert.equal(result({ ExitCode: r.status, Output: r.stdout, Error: r.stderr }, 'cleanup'), 'APP_SERVICE_NODE_CLEANUP_COMPLETE');
+});
+
+test('the production cleanup entry point executes through Kudu stdin and preserves application files', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kudu-cleanup-stdin-'));
+  const root = path.join(temp, 'site', 'wwwroot');
+  try {
+    for (const folder of ['.next/cache', '.next/server/app', 'uploads', 'node_modules']) {
+      fs.mkdirSync(path.join(root, folder), { recursive: true });
+    }
+    const generated = ['.next/cache/generated', 'oryx-manifest.toml', 'node_modules.tar.zst'];
+    const preserved = ['.next/server/app/page.html', 'uploads/keep.txt', 'node_modules/current.js'];
+    for (const file of [...generated, ...preserved]) fs.writeFileSync(path.join(root, file), 'fixture');
+    const source = fs.readFileSync(path.join(__dirname, 'clean-node-runtime.sh'), 'utf8');
+    const entry = 'clean_node_runtime /home/site/wwwroot';
+    assert.equal(source.split(entry).length, 2, 'Only substitute the fixed deployment root for this isolated fixture');
+    // Keep the complete production script and its stdin entry-point detection.
+    // The fixture's physical cwd handles Git Bash /tmp aliases; root guards stay enabled.
+    const script = source.replace(entry, 'clean_node_runtime "$(pwd -P)"');
+    const r = execute(script, { cwd: root });
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    assert.equal(result({ ExitCode: r.status, Output: r.stdout, Error: r.stderr }, 'cleanup'), 'APP_SERVICE_NODE_CLEANUP_COMPLETE');
+    for (const file of generated) assert.equal(fs.existsSync(path.join(root, file)), false, file);
+    for (const file of preserved) assert.equal(fs.readFileSync(path.join(root, file), 'utf8'), 'fixture', file);
+
+    const refused = execute(script, { cwd: temp });
+    assert.notEqual(refused.status, 0, 'A cwd outside site/wwwroot must still be refused');
+    assert.match(refused.stderr, /Unexpected application root/);
+    assert.throws(() => result({ ExitCode: refused.status, Output: refused.stdout, Error: refused.stderr }, 'cleanup'));
+  } finally {
+    assert.ok(path.resolve(temp).startsWith(path.resolve(os.tmpdir()) + path.sep));
+    assert.ok(path.basename(temp).startsWith('kudu-cleanup-stdin-'));
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
 });
 
 test('a failing decoded script retains its nonzero status', () => {
