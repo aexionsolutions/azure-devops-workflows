@@ -312,6 +312,7 @@ jobs:
           resource-group: ${{ steps.resolve.outputs.rg }}
           app-name: ${{ inputs['app-name'] }}
           package: ${{ steps.resolve.outputs.package }}
+          run-from-package: ${{ steps.resolve.outputs.run_from_package }}
           use-slot: ${{ steps.resolve.outputs.use_slot }}
           warmup-url-staging: ${{ inputs['warmup-url-staging'] }}
           warmup-url-prod: ${{ inputs['warmup-url-prod'] }}
@@ -934,6 +935,7 @@ jobs:
           resource-group: ${{ steps.resolve.outputs.rg }}
           app-name: ${{ inputs['app-name'] }}
           package: ${{ steps.resolve.outputs.package }}
+          run-from-package: ${{ steps.resolve.outputs.run_from_package }}
           use-slot: ${{ steps.resolve.outputs.use_slot }}
           warmup-url-staging: ${{ inputs['warmup-url-staging'] }}
           warmup-url-prod: ${{ inputs['warmup-url-prod'] }}

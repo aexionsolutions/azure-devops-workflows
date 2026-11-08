@@ -8,6 +8,7 @@ PACKAGE="${PACKAGE:-}"
 DEPLOY_TIMEOUT_MINUTES="${DEPLOY_TIMEOUT_MINUTES:-10}"
 SCM_SETTLE_SECONDS="${SCM_SETTLE_SECONDS:-45}"
 CLEAN_NODE_RUNTIME="${CLEAN_NODE_RUNTIME:-false}"
+RUN_FROM_PACKAGE="${RUN_FROM_PACKAGE:-false}"
 action_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 if [ -f "$RUNNER_TEMP/deploy_fail.txt" ]; then
@@ -78,6 +79,16 @@ if [ "$CLEAN_NODE_RUNTIME" = true ] && [[ "$linux_fx_version" != NODE\|* ]]; the
   echo 'deploy invalid-cleanup-runtime' > "$RUNNER_TEMP/deploy_fail.txt"
   exit 0
 fi
+if [ "$RUN_FROM_PACKAGE" != true ] && [ "$RUN_FROM_PACKAGE" != false ]; then
+  echo 'run-from-package must be true or false.' >&2
+  echo 'deploy invalid-package-mode' > "$RUNNER_TEMP/deploy_fail.txt"
+  exit 0
+fi
+if [ "$RUN_FROM_PACKAGE" = true ] && [ "$deploy_mode" = zipdeploy ] && { [[ "$linux_fx_version" != DOTNETCORE\|* ]] || [ "$CLEAN_NODE_RUNTIME" = true ]; }; then
+  echo 'Immutable package deployment requires a confirmed Linux .NET app without Node runtime cleanup.' >&2
+  echo 'deploy invalid-immutable-runtime' > "$RUNNER_TEMP/deploy_fail.txt"
+  exit 0
+fi
 
 if [ -n "$user" ] && [ -n "$pass" ]; then
   echo "::add-mask::$user"
@@ -117,7 +128,14 @@ if [ "$deploy_mode" = "zipdeploy" ]; then
     (
       set -e
       settings_marker="$RUNNER_TEMP/appservice-${APP}-${SLOT:-production}-settings-ready"
-      if [ -f "$settings_marker" ]; then
+      if [ "$RUN_FROM_PACKAGE" = true ]; then
+        # Kudu stores the ZIP in SitePackages and switches the mounted package.
+        # Never overwrite DLLs still being lazily read by the running process.
+        echo 'Using an immutable Linux .NET package; wwwroot is read-only.'
+        az webapp config appsettings set -g "$RG" -n "$APP" "${slot_args[@]}" --settings \
+          WEBSITE_RUN_FROM_PACKAGE=1 SCM_DO_BUILD_DURING_DEPLOYMENT=false --output none
+        if [ "$SCM_SETTLE_SECONDS" -gt 0 ]; then sleep "$SCM_SETTLE_SECONDS"; fi
+      elif [ -f "$settings_marker" ]; then
         echo 'Web settings and SCM replacement were prepared before deployment; no further settings writes.'
       else
       echo "Linux App Service detected; clearing run-from-package so Kudu extracts the zip into wwwroot."
@@ -145,7 +163,7 @@ if [ "$deploy_mode" = "zipdeploy" ]; then
           exit 1
         fi
       fi
-      echo "Posting package to Kudu zipdeploy endpoint for extraction."
+      echo "Posting package to Kudu zipdeploy endpoint (immutable package: $RUN_FROM_PACKAGE)."
       curl -fsS --connect-timeout 30 --max-time "$timeout_seconds" -u "$user:$pass" -X POST "$kudu_base/api/zipdeploy?isAsync=true" \
         --data-binary @"$PACKAGE" \
         -D "_logs/${target}-zipdeploy-headers.txt"
