@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux .NET immutable packages:** pass the API workflow's existing
+  `run-from-package` choice through the deployment action. Opted-in .NET apps
+  retain `WEBSITE_RUN_FROM_PACKAGE=1` during ZIP upload instead of silently
+  extracting over DLLs used by the running process. Node extraction and Windows
+  OneDeploy remain supported. Invalid modes and unsupported Linux runtimes fail
+  before upload. The complete deployment contract suite passes on Linux.
+
 - **Kudu cleanup through stdin:** the generated-runtime cleanup now handles
   Bash's unset `BASH_SOURCE[0]` when the decoded script is piped into Bash.
   Previously strict mode stopped cleanup before upload. A regression executes
