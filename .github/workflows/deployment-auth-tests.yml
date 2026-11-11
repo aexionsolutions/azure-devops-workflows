@@ -3,12 +3,14 @@ on:
   pull_request:
     paths:
       - '.github/scripts/mint-external-id-smoke*'
+      - '.github/scripts/prepare-external-id-browser*'
       - '.github/workflows/deploy-template-api.yml'
       - '.github/workflows/deployment-auth-tests.yml'
   push:
     branches: [main]
     paths:
       - '.github/scripts/mint-external-id-smoke*'
+      - '.github/scripts/prepare-external-id-browser*'
       - '.github/workflows/deploy-template-api.yml'
       - '.github/workflows/deployment-auth-tests.yml'
 permissions:
@@ -22,3 +24,23 @@ jobs:
         with:
           node-version: '22'
       - run: node --test .github/scripts/mint-external-id-smoke.test.cjs
+      - run: node --test .github/scripts/prepare-external-id-browser.test.cjs
+  browser-readiness:
+    name: Hosted Ubuntu browser readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Prepare a minimal locked caller fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/browser-caller/rx-web" "$RUNNER_TEMP/browser-caller/tools/e2e"
+          printf '{"private":true,"devDependencies":{"@playwright/test":"1.64.1"}}\n' > "$RUNNER_TEMP/browser-caller/rx-web/package.json"
+          touch "$RUNNER_TEMP/browser-caller/tools/e2e/external-id-browser-token.cjs"
+          npm install --package-lock-only --prefix "$RUNNER_TEMP/browser-caller/rx-web" --ignore-scripts --no-audit --no-fund
+      - name: Install and launch a real browser through the deployment setup
+        run: node .github/scripts/prepare-external-id-browser.cjs "$RUNNER_TEMP/browser-caller"
