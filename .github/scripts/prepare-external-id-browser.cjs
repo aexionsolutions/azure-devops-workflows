@@ -2,21 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-
-// This runs before credentials are used. A real launch still fails the job if the
-// hosted runner lacks a required library; an install alone is not readiness.
-const launchProbe = `
-const { chromium } = require('@playwright/test');
-(async () => {
-  const browser = await chromium.launch({ headless: true,
-    channel: process.env.E2E_OIDC_BROWSER_CHANNEL || undefined });
-  try {
-    const page = await browser.newPage();
-    await page.setContent('<title>Browser readiness</title><p>ready</p>');
-    if (await page.locator('p').textContent() !== 'ready') throw new Error('Browser readiness failed');
-  } finally { await browser.close(); }
-})().catch(error => { console.error(error.message); process.exitCode = 1; });
-`;
+const { installBrowser, launchProbe } = require('../actions/e2e-run-playwright/install-browser.cjs');
 
 function execute(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit', timeout: 240000 });
@@ -37,8 +23,7 @@ function prepare(caller, run = execute) {
   // Ubuntu hosted images already contain the Chromium runtime libraries. Avoid
   // refreshing apt/installing optional fonts on every promotion: mirror DNS can
   // fail even when the browser is runnable. Never ignore a failed install/launch.
-  run('npx', ['--no-install', 'playwright', 'install', 'chromium'], web);
-  run(process.execPath, ['-e', launchProbe], web);
+  installBrowser(web, run);
 }
 
 if (require.main === module) {

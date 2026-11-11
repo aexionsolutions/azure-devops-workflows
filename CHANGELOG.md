@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Browser CI uses the same fail-closed readiness check as API smoke.**
+  `e2e-run-playwright` no longer runs apt unconditionally. It installs the locked
+  Chromium and requires a real launch; suite execution is unchanged. This fixes
+  RavenXpress PR731's three browser jobs failing on Ubuntu mirror DNS. Both entry
+  points are exercised on hosted Ubuntu. Publish under a new tag after owner
+  approval; existing v6.2.6 is not moved.
 - **API External ID verification: avoid unnecessary apt downloads.** Install the
   caller's locked Playwright Chromium without `--with-deps`, then require a real
   browser launch and rendered-page probe before authentication. Three RavenXpress
