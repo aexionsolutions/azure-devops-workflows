@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **API External ID verification: avoid unnecessary apt downloads.** Install the
+  caller's locked Playwright Chromium without `--with-deps`, then require a real
+  browser launch and rendered-page probe before authentication. Three RavenXpress
+  promotions failed on Ubuntu mirror DNS while downloading optional fonts; the
+  API upload and version check had succeeded. Setup/launch failures still block
+  promotion, and the protected API smoke test is unchanged. A hosted Ubuntu CI
+  job exercises the real setup without Azure credentials.
 - **Linux .NET immutable packages:** pass the API workflow's existing
   `run-from-package` choice through the deployment action. Opted-in .NET apps
   retain `WEBSITE_RUN_FROM_PACKAGE=1` during ZIP upload instead of silently
