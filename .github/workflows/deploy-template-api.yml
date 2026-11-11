@@ -483,18 +483,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f caller/rx-web/package-lock.json ]; then
-            WEB=caller/rx-web
-          elif [ -f caller/web/tems-portal/package-lock.json ]; then
-            WEB=caller/web/tems-portal
-          else
-            echo '::error::External ID smoke requires the caller browser helper and a locked Playwright web package.'
-            exit 1
-          fi
-          test -f caller/tools/e2e/external-id-browser-token.cjs
-          npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
-          cd "$WEB"
-          npx --no-install playwright install --with-deps chromium
+          node "$GITHUB_WORKSPACE/shared/.github/scripts/prepare-external-id-browser.cjs"
 
       - name: Acquire delegated token for protected smoke
         id: token
