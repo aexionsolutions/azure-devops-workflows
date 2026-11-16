@@ -322,7 +322,8 @@ jobs:
   e2e-reqnroll:
     name: Reqnroll
     if: needs.plan-e2e.outputs.run_reqnroll == 'true'
-    runs-on: ubuntu-latest
+    # Microsoft.Playwright supplied by callers may not support the next LTS yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]
     services:
@@ -460,7 +461,7 @@ jobs:
   e2e-playwright:
     name: ${{ matrix.label }}
     if: needs.plan-e2e.outputs.playwright_legs != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]
     strategy:

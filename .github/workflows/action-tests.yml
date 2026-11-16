@@ -6,16 +6,47 @@ on:
     paths:
       - '.github/actions/**'
       - '.github/workflows/action-tests.yml'
+      - '.github/workflows/web-e2e*.yml'
   push:
     branches: [main]
     paths:
       - '.github/actions/**'
       - '.github/workflows/action-tests.yml'
+      - '.github/workflows/web-e2e*.yml'
 
 permissions:
   contents: read
 
 jobs:
+  playwright-dotnet:
+    name: Caller Playwright browser bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install and launch the caller's pinned .NET browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$RUNNER_TEMP/playwright-bootstrap"
+          dotnet new console --output "$probe_dir" --framework net10.0
+          # Matches RavenXpress's failing Reqnroll SDK; do not substitute the Node CLI.
+          dotnet add "$probe_dir" package Microsoft.Playwright --version 1.59.0
+          cat > "$probe_dir/Program.cs" <<'CS'
+          using Microsoft.Playwright;
+          using var playwright = await Playwright.CreateAsync();
+          await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+          var page = await browser.NewPageAsync();
+          await page.SetContentAsync("<h1>Browser bootstrap passed</h1>");
+          if (await page.Locator("h1").TextContentAsync() != "Browser bootstrap passed")
+              throw new Exception("Chromium did not render the probe page.");
+          Console.WriteLine("Pinned caller SDK installed and launched Chromium successfully.");
+          CS
+          dotnet build "$probe_dir" --configuration Release
+          pwsh "$probe_dir/bin/Release/net10.0/playwright.ps1" install --with-deps chromium
+          dotnet run --project "$probe_dir" --configuration Release --no-build
   appservice-deploy:
     name: App Service deployment contract
     runs-on: ubuntu-latest
