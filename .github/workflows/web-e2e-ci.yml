@@ -295,7 +295,8 @@ jobs:
   # web-e2e-parallel-ci.yml instead.
   e2e-tests:
     name: Reqnroll and Playwright
-    runs-on: ubuntu-latest
+    # Keep browser installation compatible with callers' pinned Playwright SDKs.
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.job_timeout_minutes }}
     needs: [build-api, plan-e2e]
     services:

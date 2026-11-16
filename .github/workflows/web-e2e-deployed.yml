@@ -237,7 +237,8 @@ on:
 jobs:
   e2e-deployed:
     name: E2E Tests (Deployed)
-    runs-on: ubuntu-latest
+    # The caller's Microsoft.Playwright version may not support newer LTS images.
+    runs-on: ubuntu-24.04
     # Passing a name only as an input/env variable does not bind the GitHub job.
     # Match the caller's environment-scoped Azure federation and protections.
     environment: ${{ inputs.environment_name }}
