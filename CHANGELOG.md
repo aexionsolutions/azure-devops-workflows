@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pin browser jobs in the combined, parallel and deployed E2E workflows to
+  Ubuntu 24.04. Ubuntu 26.04 from `ubuntu-latest` is rejected by callers using
+  Microsoft.Playwright 1.59.0 before any Reqnroll scenario runs. Add a real .NET
+  Chromium installation and launch check; keep test filters, retries and gates.
+
 - **Browser CI uses the same fail-closed readiness check as API smoke.**
   `e2e-run-playwright` no longer runs apt unconditionally. It installs the locked
   Chromium and requires a real launch; suite execution is unchanged. This fixes

@@ -243,6 +243,12 @@ concurrency_group: ravenxpress-api-build
 
 Two entry points to the same full-stack E2E setup (shared as composite actions), with the same inputs:
 
+Browser jobs in both entry points and `web-e2e-deployed.yml` use `ubuntu-24.04`.
+The moving `ubuntu-latest` image can advance before a caller's pinned .NET
+Playwright supports it; 1.59.0 refuses Chromium installation on Ubuntu 26.04.
+Build/planning jobs can still use the latest image. The action CI installs and
+launches the pinned .NET browser on 24.04 to check the actual bootstrap path.
+
 - **`web-e2e-ci.yml`**: every suite in one `Reqnroll and Playwright` job, Reqnroll first, then Playwright.
 - **`web-e2e-parallel-ci.yml`**: a `Reqnroll` job and one `Playwright N of M` job per shard, each with
   its own database, API and web. Takes `playwright_shards` (1-8).
